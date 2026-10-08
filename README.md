@@ -31,6 +31,8 @@ Desde GitHub (última versión de la rama `main`):
 pip install "factec @ git+https://github.com/jurdin32/factec.git"
 # con la app de Django:
 pip install "factec[django] @ git+https://github.com/jurdin32/factec.git"
+# una versión concreta (etiqueta de GitHub):
+pip install "factec[django] @ git+https://github.com/jurdin32/factec.git@v1.1.0"
 ```
 
 Desde el código fuente (esta carpeta):
