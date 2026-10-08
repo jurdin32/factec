@@ -25,6 +25,14 @@ los seis comprobantes electrónicos que exige el Servicio de Rentas Internas.
 pip install factec
 ```
 
+Desde GitHub (última versión de la rama `main`):
+
+```bash
+pip install "factec @ git+https://github.com/jurdin32/factec.git"
+# con la app de Django:
+pip install "factec[django] @ git+https://github.com/jurdin32/factec.git"
+```
+
 Desde el código fuente (esta carpeta):
 
 ```bash
@@ -545,6 +553,38 @@ Eso crea las tablas de la app (usa el *label* `sri_fe`):
 
 No hay que generar migraciones en el proyecto: vienen dentro del paquete, así que
 `migrate` deja la base de datos lista.
+
+#### Dónde se guarda el certificado `.p12`
+
+El archivo de firma se guarda en un `FileField`, o sea dentro de `MEDIA_ROOT`. Un
+proyecto recién creado con `django-admin startproject` **no** define esas
+opciones: añádalas o la carga del certificado fallará.
+
+```python
+# settings.py
+BASE_DIR = Path(__file__).resolve().parent.parent
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "media"
+```
+
+```python
+# en el admin: adjunte el archivo en «Firma electrónica → Archivo de firma».
+# o desde código, guardándolo en el campo (no le pase una ruta absoluta):
+from pathlib import Path
+
+from django.core.files import File
+
+configuracion.certificado.save("firma.p12", File(open("/ruta/a/mi/firma.p12", "rb")))
+configuracion.establecer_clave("contraseña del .p12")   # se guarda cifrada
+configuracion.save()
+```
+
+Si despliega con `DEBUG = False`, sirva `MEDIA_URL` con su servidor web (o use un
+almacenamiento como S3). Para instalarlo desde GitHub:
+
+```bash
+pip install "factec[django] @ git+https://github.com/jurdin32/factec.git"
+```
 
 ### 14.2 Los modelos del SRI (clientes, productos y comprobantes)
 
