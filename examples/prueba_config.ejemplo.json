@@ -1,0 +1,35 @@
+{
+  "_comentario": "PLANTILLA. Copia este archivo a prueba_config.json (en la raíz del proyecto) y rellena tus datos. NO incluyas aquí la contraseña del .p12: el script la pide por teclado.",
+
+  "certificado": "/ruta/a/tu/firma_electronica.p12",
+
+  "ruc": "1790012345001",
+  "razon_social": "RAZON SOCIAL SEGUN EL SRI",
+  "nombre_comercial": "",
+  "dir_matriz": "DIRECCION DE LA MATRIZ",
+
+  "estab": "001",
+  "pto_emi": "001",
+  "secuencial_inicial": 1,
+
+  "obligado_contabilidad": false,
+  "contribuyente_especial": null,
+  "agente_retencion": null,
+
+  "_contribuyente_rimpe": "true si eres RIMPE. Si eres Negocio Popular, pon regimen = 'NEGOCIO POPULAR'.",
+  "contribuyente_rimpe": false,
+  "regimen": null,
+
+  "_iva": "Codigo de tarifa de IVA: '0' = 0, '4' = 15, '2' = 12, '3' = 14, '5' = 5, '6' = no objeto, '7' = exento",
+  "codigo_porcentaje_iva": "4",
+
+  "descripcion": "Servicio de prueba",
+
+  "_receptor": "Si lo omites se usa Consumidor Final (07 / 9999999999999).",
+  "receptor": {
+    "razon_social": "CONSUMIDOR FINAL",
+    "identificacion": "9999999999999",
+    "tipo_identificacion": "07",
+    "direccion": "QUITO"
+  }
+}

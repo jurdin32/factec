@@ -1,0 +1,257 @@
+"""Resolución de la configuración de facturación electrónica en Django.
+
+Orden de búsqueda:
+
+1. La ``ConfiguracionEmisor`` **activa** en la base de datos (lo normal: se
+   gestiona desde el admin).
+2. ``settings.FACTURACION_ELECTRONICA`` y las variables de entorno, como respaldo
+   para cuando la tabla aún no existe (por ejemplo, antes de ``migrate``) o para
+   despliegues sin acceso al admin.
+
+La clave de cifrado y la contraseña del certificado se leen siempre del entorno o
+de los ajustes, nunca en claro desde la base de datos.
+"""
+
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from typing import Any, Dict, Optional
+
+from django.core.exceptions import ImproperlyConfigured
+from django.utils.module_loading import import_string
+
+from ..catalogos import Ambiente
+from ..excepciones import ErrorValidacion
+from ..modelos import Emisor
+
+__all__ = [
+    "AJUSTES_POR_DEFECTO",
+    "ajustes",
+    "obtener",
+    "configuracion_activa",
+    "emisor",
+    "certificado",
+    "cliente",
+    "clave_certificado",
+    "clave_cifrado",
+    "ambiente",
+    "limpiar_cache",
+    "nombre_tarea",
+]
+
+AJUSTES_POR_DEFECTO: Dict[str, Any] = {
+    "AMBIENTE": int(Ambiente.PRUEBAS),
+    "CERTIFICADO": None,
+    "CLAVE_CERTIFICADO": None,
+    "CLAVE_CIFRADO": None,
+    "EMISOR": None,
+    "REINTENTOS_AUTORIZACION": 6,
+    "ESPERA_AUTORIZACION": 4.0,
+    "GUARDAR_XML": True,
+    "CELERY_QUEUE": None,
+    "CELERY_PREFIX": "sri_fe",
+    "TIMEOUT": 30.0,
+    "TIMEOUT_CONSULTA_SRI": 15.0,
+    "CONSULTAR_SRI_AUTOMATICAMENTE": True,
+    #: Si es True, emitir() encola en Celery; si False, procesa en el acto.
+    "EMITIR_CON_CELERY": True,
+    "VALIDAR_VIGENCIA": True,
+    "ALGORITMO_FIRMA": "sha1",
+    "USAR_BASE_DE_DATOS": True,
+}
+
+_VARIABLES_ENTORNO = {
+    "SRI_AMBIENTE": "AMBIENTE",
+    "SRI_CERTIFICADO": "CERTIFICADO",
+    "SRI_CLAVE_CERTIFICADO": "CLAVE_CERTIFICADO",
+    "SRI_CLAVE_CIFRADO": "CLAVE_CIFRADO",
+    "SRI_TIMEOUT": "TIMEOUT",
+    "SRI_ALGORITMO_FIRMA": "ALGORITMO_FIRMA",
+}
+
+PREFIJO_TAREAS_POR_DEFECTO = "sri_fe"
+
+
+def ajustes() -> Dict[str, Any]:
+    """Devuelve los ajustes resueltos (settings + variables de entorno)."""
+    from django.conf import settings as django_settings
+
+    configuracion = dict(AJUSTES_POR_DEFECTO)
+    propios = getattr(django_settings, "FACTURACION_ELECTRONICA", None) or {}
+    if not isinstance(propios, dict):
+        raise ImproperlyConfigured("settings.FACTURACION_ELECTRONICA debe ser un diccionario.")
+    configuracion.update({k: v for k, v in propios.items() if v is not None})
+
+    for variable, clave in _VARIABLES_ENTORNO.items():
+        valor = os.environ.get(variable)
+        if valor not in (None, ""):
+            configuracion[clave] = valor
+
+    configuracion["AMBIENTE"] = int(configuracion["AMBIENTE"])
+    configuracion["REINTENTOS_AUTORIZACION"] = int(configuracion["REINTENTOS_AUTORIZACION"])
+    configuracion["ESPERA_AUTORIZACION"] = float(configuracion["ESPERA_AUTORIZACION"])
+    configuracion["TIMEOUT"] = float(configuracion["TIMEOUT"])
+    return configuracion
+
+
+def obtener(nombre: str, por_defecto: Any = None) -> Any:
+    """Devuelve un ajuste concreto."""
+    return ajustes().get(nombre, por_defecto)
+
+
+def clave_cifrado() -> str:
+    """Clave Fernet con la que se cifra la contraseña del certificado."""
+    clave = obtener("CLAVE_CIFRADO")
+    if not clave:
+        raise ImproperlyConfigured(
+            "Falta la clave de cifrado de secretos. Genérela con:\n"
+            '  python -c "from factec.django.crypto '
+            'import generar_clave; print(generar_clave())"\n'
+            "y defínala en FACTURACION_ELECTRONICA['CLAVE_CIFRADO'] o en la variable "
+            "de entorno SRI_CLAVE_CIFRADO (recomendado)."
+        )
+    return str(clave)
+
+
+# ------------------------------------------------------------- base de datos
+
+
+def configuracion_activa(ambiente: Optional[int] = None) -> Optional[Any]:
+    """Devuelve la ``ConfiguracionEmisor`` activa, o ``None``.
+
+    Nunca lanza excepción: si la tabla todavía no existe (antes de ``migrate``)
+    devuelve ``None`` para que se use la configuración de ``settings``.
+    """
+    if not obtener("USAR_BASE_DE_DATOS", True):
+        return None
+
+    try:
+        from .models import ConfiguracionEmisor
+
+        consulta = ConfiguracionEmisor.objects.filter(activo=True)
+        if ambiente is not None:
+            consulta = consulta.filter(ambiente=int(ambiente))
+        return consulta.order_by("-ambiente").first()
+    except Exception:  # noqa: BLE001 - tabla inexistente, apps sin cargar, etc.
+        return None
+
+
+def ambiente() -> int:
+    """Ambiente configurado: el de la configuración activa o el de los ajustes."""
+    activa = configuracion_activa()
+    if activa is not None:
+        return int(activa.ambiente)
+    return int(obtener("AMBIENTE", int(Ambiente.PRUEBAS)))
+
+
+# --------------------------------------------------------------- resolución
+
+
+def _resolver_emisor(valor: Any) -> Emisor:
+    if isinstance(valor, Emisor):
+        return valor
+    if isinstance(valor, str):
+        valor = import_string(valor)()
+    if callable(valor):
+        valor = valor()
+    if isinstance(valor, dict):
+        return Emisor(**valor)
+    raise ImproperlyConfigured(
+        "FACTURACION_ELECTRONICA['EMISOR'] debe ser un diccionario, un Emisor o una "
+        "ruta importable que devuelva uno de los dos."
+    )
+
+
+def emisor() -> Emisor:
+    """Emisor configurado, desde la base de datos o desde los ajustes."""
+    activa = configuracion_activa()
+    if activa is not None:
+        return activa.a_emisor()
+
+    valor = obtener("EMISOR")
+    if valor is None:
+        raise ImproperlyConfigured(
+            "No hay ningún emisor configurado. Cree una «configuración del emisor» en "
+            "el admin de Django (o defina FACTURACION_ELECTRONICA['EMISOR'])."
+        )
+    emisor_obj = _resolver_emisor(valor)
+    if not emisor_obj.ruc:
+        raise ErrorValidacion("El emisor configurado no tiene RUC.")
+    return emisor_obj
+
+
+def clave_certificado() -> str:
+    """Contraseña del certificado: de la configuración activa o de los ajustes."""
+    activa = configuracion_activa()
+    if activa is not None and activa.clave_certificado_cifrada:
+        return activa.obtener_clave()
+
+    directa = obtener("CLAVE_CERTIFICADO")
+    if directa:
+        return str(directa)
+
+    raise ImproperlyConfigured(
+        "Falta la contraseña del certificado. Escríbala en la «configuración del "
+        "emisor» del admin o defina SRI_CLAVE_CERTIFICADO."
+    )
+
+
+@lru_cache(maxsize=1)
+def certificado():
+    """Certificado de firma: el de la configuración activa o el de los ajustes."""
+    from ..firma import Certificado
+
+    activa = configuracion_activa()
+    if activa is not None and activa.certificado:
+        return activa.certificado_obj(validar_vigencia=bool(obtener("VALIDAR_VIGENCIA", True)))
+
+    ruta = obtener("CERTIFICADO")
+    if not ruta:
+        raise ImproperlyConfigured(
+            "No hay certificado de firma. Súbalo en la «configuración del emisor» del "
+            "admin (o defina FACTURACION_ELECTRONICA['CERTIFICADO'])."
+        )
+    certificado_obj = Certificado.desde_archivo(ruta, clave_certificado())
+    if obtener("VALIDAR_VIGENCIA", True):
+        certificado_obj.validar_vigencia()
+    return certificado_obj
+
+
+@lru_cache(maxsize=1)
+def cliente():
+    """Cliente SOAP del SRI (memorizado)."""
+    from ..sri import ClienteSRI
+
+    return ClienteSRI(ambiente=ambiente(), timeout=obtener("TIMEOUT"))
+
+
+def limpiar_cache() -> None:
+    """Descarta cliente y certificado memorizados (útil al editar la configuración).
+
+    Es tolerante: si alguna de las dos está sustituida por una función simple (por
+    ejemplo en pruebas), simplemente se omite.
+    """
+    for funcion in (certificado, cliente):
+        vaciar = getattr(funcion, "cache_clear", None)
+        if callable(vaciar):
+            vaciar()
+
+
+def celery_queue() -> Optional[str]:
+    """Cola de Celery donde encolar las tareas (``None`` = cola por defecto)."""
+    return obtener("CELERY_QUEUE")
+
+
+def nombre_tarea(clave: str) -> str:
+    """Nombre completo de una tarea, con el prefijo configurado.
+
+    No lanza excepción si los ajustes aún no están disponibles: se usa en los
+    decoradores de Celery, que pueden evaluarse muy pronto.
+    """
+    prefijo = PREFIJO_TAREAS_POR_DEFECTO
+    try:
+        prefijo = str(obtener("CELERY_PREFIX") or PREFIJO_TAREAS_POR_DEFECTO)
+    except Exception:  # noqa: BLE001 - importación temprana sin settings
+        pass
+    return f"{prefijo}.{clave}"

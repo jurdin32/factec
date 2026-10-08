@@ -1,0 +1,1098 @@
+"""Pruebas de los modelos del SRI: catálogos, comprobantes y su emisión.
+
+Comprueban que basta con añadir la app a ``INSTALLED_APPS`` y migrar: las tablas
+existen, cada comprobante se emite desde su modelo y el XML que se genera es válido
+según el esquema oficial.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal
+from typing import Any
+
+import pytest
+from lxml import etree
+
+from conftest import RUC, _receptor, _superusuario
+
+HOY = date(2026, 10, 8)
+
+#: Tablas que deben existir tras migrar.
+TABLAS = (
+    "sri_fe_cliente",
+    "sri_fe_producto",
+    "sri_fe_factura",
+    "sri_fe_facturadetalle",
+    "sri_fe_liquidacioncompra",
+    "sri_fe_liquidacioncompradetalle",
+    "sri_fe_notacredito",
+    "sri_fe_notacreditodetalle",
+    "sri_fe_notadebito",
+    "sri_fe_notadebitomotivo",
+    "sri_fe_guiaremision",
+    "sri_fe_guiadestinatario",
+    "sri_fe_guiadetalle",
+    "sri_fe_retencion",
+    "sri_fe_retenciondocsustento",
+    "sri_fe_retenciondocsustentoimpuesto",
+    "sri_fe_retencionimpuesto",
+)
+
+
+# ------------------------------------------------------------------- fixtures
+
+
+@pytest.fixture
+def documentos(entorno_django):
+    """Deja los comprobantes vacíos antes y después de cada prueba."""
+    from factec.django import documentos as mod
+
+    def vaciar() -> None:
+        mod.RetencionDocSustento.objects.all().delete()
+        mod.Retencion.objects.all().delete()
+        mod.GuiaDestinatario.objects.all().delete()
+        mod.GuiaRemision.objects.all().delete()
+        mod.NotaDebito.objects.all().delete()
+        mod.NotaCredito.objects.all().delete()
+        mod.LiquidacionCompra.objects.all().delete()
+        mod.Factura.objects.all().delete()
+        mod.Producto.objects.all().delete()
+        mod.Cliente.objects.all().delete()
+
+    vaciar()
+    yield mod
+    vaciar()
+
+
+@pytest.fixture
+def cliente(documentos):
+    return documentos.Cliente.objects.create(
+        razon_social="DISTRIBUIDORA ANDINA CÍA. LTDA.",
+        identificacion="1790012345001",
+        tipo_identificacion="04",
+        direccion="AV. AMAZONAS 123, QUITO",
+    )
+
+
+@pytest.fixture
+def proveedor(documentos):
+    return documentos.Cliente.objects.create(
+        razon_social="MARÍA PÉREZ LOOR",
+        identificacion="1712345678",
+        tipo_identificacion="05",
+        direccion="CALLE 10 DE AGOSTO, GUAYAQUIL",
+    )
+
+
+@pytest.fixture
+def producto(documentos):
+    return documentos.Producto.objects.create(
+        codigo_principal="SRV001",
+        descripcion="Servicio de desarrollo",
+        unidad_medida="hora",
+        precio_unitario=Decimal("100"),
+        codigo_porcentaje_iva="4",
+    )
+
+
+@pytest.fixture
+def factura(documentos, configuracion, cliente, producto):
+    """Factura con dos líneas: una al 15 % y otra al 0 %."""
+    documento = documentos.Factura.objects.create(
+        receptor=cliente, fecha_emision=HOY, forma_pago="19"
+    )
+    documento.detalles.create(producto=producto, cantidad=Decimal("2"))
+    documento.detalles.create(
+        descripcion="Soporte mensual", cantidad=1, precio_unitario=Decimal("50"),
+        codigo_porcentaje_iva="0",
+    )
+    return documento
+
+
+def _valida(esquemas: Any, nombre_xsd: str, xml: str) -> None:
+    esquema = esquemas(nombre_xsd)
+    documento = etree.fromstring(xml.encode("utf-8"))
+    assert esquema.validate(documento), "\n".join(str(e) for e in esquema.error_log)
+
+
+# --------------------------------------------------------------- migraciones
+
+
+def test_las_tablas_se_crean_al_migrar(entorno_django):
+    """Añadir la app a ``INSTALLED_APPS`` y migrar crea todas las tablas."""
+    from django.db import connection
+
+    existentes = set(connection.introspection.table_names())
+    faltan = [tabla for tabla in TABLAS if tabla not in existentes]
+    assert not faltan, f"faltan tablas: {faltan}"
+
+
+def test_no_quedan_migraciones_pendientes(entorno_django):
+    """El paquete trae sus migraciones: el proyecto no tiene que generarlas."""
+    import django
+    from django.db import connection
+    from django.db.migrations.autodetector import MigrationAutodetector
+    from django.db.migrations.loader import MigrationLoader
+    from django.db.migrations.state import ProjectState
+
+    cargador = MigrationLoader(connection)
+    detector = MigrationAutodetector(
+        cargador.project_state(), ProjectState.from_apps(django.apps.apps)
+    )
+    cambios = detector.changes(graph=cargador.graph, trim_to_apps={"sri_fe"})
+
+    # Los modelos no gestionados (los que declaran las propias pruebas para imitar
+    # un proyecto) no crean tablas, así que no cuentan como migración pendiente.
+    pendientes = [
+        f"{operacion.__class__.__name__}: {getattr(operacion, 'name', '')}"
+        for migracion in cambios.get("sri_fe", [])
+        for operacion in migracion.operations
+        if (getattr(operacion, "options", None) or {}).get("managed") is not False
+    ]
+    assert not pendientes, f"hay migraciones sin generar: {pendientes}"
+
+
+def test_manage_py_check_no_reporta_errores(entorno_django):
+    """El admin y los modelos del paquete pasan la comprobación de Django."""
+    import io
+
+    from django.core.management import call_command
+
+    salida = io.StringIO()
+    call_command("check", stdout=salida, stderr=salida)
+
+    assert "ERRORS" not in salida.getvalue(), salida.getvalue()
+
+
+def test_se_registran_los_adaptadores(documentos):
+    """Cada comprobante sabe con qué adaptador emitirse."""
+    from factec.django import adaptadores
+
+    assert adaptadores.obtener(documentos.Factura) is adaptadores.AdaptadorFactura
+    assert adaptadores.obtener(documentos.NotaCredito) is adaptadores.AdaptadorNotaCredito
+    assert adaptadores.obtener(documentos.NotaDebito) is adaptadores.AdaptadorNotaDebito
+    assert (
+        adaptadores.obtener(documentos.LiquidacionCompra)
+        is adaptadores.AdaptadorLiquidacionCompra
+    )
+    assert adaptadores.obtener(documentos.GuiaRemision) is adaptadores.AdaptadorGuiaRemision
+    assert adaptadores.obtener(documentos.Retencion) is adaptadores.AdaptadorRetencion
+
+
+# ----------------------------------------------------------------- catálogos
+
+
+def test_el_cliente_valida_la_identificacion(documentos):
+    from django.core.exceptions import ValidationError
+
+    with pytest.raises(ValidationError):
+        documentos.Cliente(
+            razon_social="X", identificacion="1790012345", tipo_identificacion="04"
+        ).full_clean()
+
+    with pytest.raises(ValidationError):
+        documentos.Cliente(
+            razon_social="X", identificacion="1790012345001", tipo_identificacion="05"
+        ).full_clean()
+
+    valido = documentos.Cliente(
+        razon_social="X", identificacion="1790012345001", tipo_identificacion="04"
+    )
+    valido.full_clean()
+    assert valido.identificacion == "1790012345001"
+
+
+def test_el_consumidor_final_usa_su_identificacion(documentos):
+    cliente = documentos.Cliente(
+        razon_social="CONSUMIDOR FINAL", tipo_identificacion="07", identificacion=""
+    )
+    cliente.full_clean()
+    assert cliente.identificacion == "9999999999999"
+
+    guardado = documentos.Cliente.consumidor_final()
+    assert guardado.identificacion == "9999999999999"
+    assert documentos.Cliente.consumidor_final().pk == guardado.pk
+
+
+def test_la_linea_se_completa_con_el_producto(factura, producto):
+    """Al elegir producto no hay que repetir código, precio ni IVA."""
+    linea = factura.detalles.create(producto=producto, cantidad=2)
+
+    assert linea.codigo_principal == "SRV001"
+    assert linea.descripcion == "Servicio de desarrollo"
+    assert linea.unidad_medida == "hora"
+    assert linea.precio_unitario == Decimal("100.000000")
+    assert linea.codigo_porcentaje_iva == "4"
+    assert linea.precio_total_sin_impuesto == Decimal("200.00")
+    assert linea.valor_iva == Decimal("30.00")       # 200 × 15 %
+    assert linea.total == Decimal("230.00")
+
+
+def test_los_totales_del_modelo_son_los_del_xml(factura):
+    assert factura.subtotal == Decimal("250.00")     # 200 + 50
+    assert factura.valor_iva == Decimal("30.00")     # solo la línea al 15 %
+    assert factura.total == Decimal("280.00")
+
+
+# ------------------------------------------------------------------- factura
+
+
+def test_factura_emite_y_el_xml_es_valido(factura, cliente_falso, esquemas):
+    registro = factura.emitir(encolar=False)
+    factura.refresh_from_db()
+
+    assert registro.estado == "AUTORIZADO"
+    assert factura.estado == "AUTORIZADO"
+    assert factura.autorizado is True
+    assert factura.clave_acceso == registro.clave_acceso
+    assert factura.numero_autorizacion == registro.clave_acceso
+    assert factura.secuencial == "1"
+    assert factura.comprobante_id == registro.pk
+    assert factura.total == registro.importe_total == Decimal("280.00")
+    _valida(esquemas, "factura_V1.1.0.xsd", registro.xml_sin_firma)
+    assert "ds:Signature" in registro.xml_firmado
+
+
+def test_factura_incluye_el_pago_con_el_total(factura, cliente_falso):
+    """La forma de pago del modelo viaja al XML con el importe total."""
+    registro = factura.emitir(encolar=False)
+
+    assert "<formaPago>19</formaPago>" in registro.xml_sin_firma
+    assert "<total>280.00</total>" in registro.xml_sin_firma
+
+
+def test_emitir_dos_veces_no_duplica(factura, cliente_falso):
+    from factec.django import models
+
+    primero = factura.emitir(encolar=False)
+    cliente_falso.llamadas.clear()
+    segundo = factura.emitir(encolar=False)
+
+    assert segundo.pk == primero.pk
+    assert models.ComprobanteEmitido.objects.count() == 1
+    assert cliente_falso.llamadas == []
+
+
+# ------------------------------------------------------ liquidación de compra
+
+
+def test_liquidacion_de_compra(documentos, configuracion, proveedor, cliente_falso, esquemas):
+    liquidacion = documentos.LiquidacionCompra.objects.create(
+        proveedor=proveedor, fecha_emision=HOY, correo="maria@example.com"
+    )
+    liquidacion.detalles.create(
+        descripcion="Compra de suministros", cantidad=1,
+        precio_unitario=Decimal("80"), codigo_porcentaje_iva="4",
+    )
+    registro = liquidacion.emitir(encolar=False)
+
+    assert registro.estado == "AUTORIZADO"
+    assert liquidacion.total == registro.importe_total == Decimal("92.00")
+    _valida(esquemas, "LiquidacionCompra_V1.1.0.xsd", registro.xml_sin_firma)
+    assert "<tipoNegociable>" in registro.xml_sin_firma
+    assert "<correo>maria@example.com</correo>" in registro.xml_sin_firma
+
+
+# ---------------------------------------------------------- nota de crédito
+
+
+def test_nota_de_credito(documentos, configuracion, cliente, cliente_falso, esquemas):
+    nota = documentos.NotaCredito.objects.create(
+        receptor=cliente, fecha_emision=HOY, motivo="Devolución de mercadería",
+        num_doc_modificado="001001000000012",          # sin guiones: se normaliza
+        fecha_emision_doc_sustento=HOY,
+    )
+    nota.detalles.create(
+        descripcion="Devolución", cantidad=1, precio_unitario=Decimal("30"),
+        codigo_porcentaje_iva="4",
+    )
+    registro = nota.emitir(encolar=False)
+    nota.refresh_from_db()
+
+    assert nota.num_doc_modificado == "001-001-000000012"
+    assert registro.estado == "AUTORIZADO"
+    _valida(esquemas, "NotaCredito_V1.1.0.xsd", registro.xml_sin_firma)
+    assert "<numDocModificado>001-001-000000012</numDocModificado>" in registro.xml_sin_firma
+
+
+def test_nota_de_credito_exige_motivo(documentos, configuracion, cliente, cliente_falso):
+    from factec.excepciones import ErrorValidacion
+
+    nota = documentos.NotaCredito.objects.create(
+        receptor=cliente, fecha_emision=HOY, motivo="",
+        num_doc_modificado="001-001-000000012", fecha_emision_doc_sustento=HOY,
+    )
+    nota.detalles.create(descripcion="X", cantidad=1, precio_unitario=10)
+
+    with pytest.raises(ErrorValidacion):
+        nota.emitir(encolar=False)
+
+
+# ----------------------------------------------------------- nota de débito
+
+
+def test_nota_de_debito(documentos, configuracion, cliente, cliente_falso, esquemas):
+    nota = documentos.NotaDebito.objects.create(
+        receptor=cliente, fecha_emision=HOY, codigo_porcentaje_iva="4",
+        num_doc_modificado="001-001-000000014", fecha_emision_doc_sustento=HOY,
+        forma_pago="01",
+    )
+    nota.motivos.create(razon="Intereses por mora", valor=Decimal("25"))
+
+    assert nota.total_sin_impuestos == Decimal("25.00")
+    assert nota.valor_iva == Decimal("3.75")
+    assert nota.total == Decimal("28.75")
+
+    registro = nota.emitir(encolar=False)
+    assert registro.estado == "AUTORIZADO"
+    assert registro.importe_total == Decimal("28.75")
+    _valida(esquemas, "NotaDebito_V1.0.0.xsd", registro.xml_sin_firma)
+
+
+# -------------------------------------------------------- guía de remisión
+
+
+def test_guia_de_remision(documentos, configuracion, cliente, cliente_falso, esquemas):
+    guia = documentos.GuiaRemision.objects.create(
+        fecha_emision=HOY, dir_partida="PANAMERICANA Y CARCHI",
+        razon_social_transportista="TRANSPORTES DEL NORTE CÍA. LTDA.",
+        ruc_transportista="1790012345001", placa="PBX-1234",
+        fecha_ini_transporte=HOY, fecha_fin_transporte=HOY,
+    )
+    destinatario = guia.destinatarios.create(
+        razon_social=cliente.razon_social, identificacion=cliente.identificacion,
+        tipo_identificacion="04", direccion="AV. AMAZONAS 123, QUITO", motivo_traslado="01",
+    )
+    destinatario.detalles.create(descripcion="Servicio de desarrollo", cantidad=2,
+                                  codigo_principal="SRV001")
+
+    registro = guia.emitir(encolar=False)
+    assert registro.estado == "AUTORIZADO"
+    _valida(esquemas, "GuiaRemision_V1.1.0.xsd", registro.xml_sin_firma)
+
+
+def test_guia_valida_las_fechas(documentos):
+    from django.core.exceptions import ValidationError
+
+    guia = documentos.GuiaRemision(
+        fecha_emision=HOY, dir_partida="X", razon_social_transportista="Y",
+        ruc_transportista="1790012345001", placa="PBX-1234",
+        fecha_ini_transporte=HOY, fecha_fin_transporte=date(2026, 10, 1),
+    )
+    with pytest.raises(ValidationError):
+        guia.full_clean()
+
+
+# ----------------------------------------------------- comprobante de retención
+
+
+@pytest.fixture
+def retencion(documentos, configuracion, proveedor):
+    retencion = documentos.Retencion.objects.create(
+        sujeto_retenido=proveedor, fecha_emision=HOY, periodo_fiscal=HOY, parte_rel="NO"
+    )
+    sustento = retencion.docs_sustento.create(
+        cod_sustento="01", cod_doc_sustento="01",
+        num_doc_sustento="001-001-000000012",           # con guiones: se limpian
+        fecha_emision=HOY,
+        num_aut_doc_sustento="0810202601179001234500110010010000000121234567818",
+        total_sin_impuestos=Decimal("100"), importe_total=Decimal("115"),
+    )
+    sustento.impuestos.create(codigo_porcentaje="4")
+    sustento.retenciones.create(codigo="1", codigo_retencion="312",
+                                 porcentaje_retener=Decimal("1.75"))
+    return retencion
+
+
+def test_retencion(documentos, retencion, cliente_falso, esquemas):
+    registro = retencion.emitir(encolar=False)
+    retencion.refresh_from_db()
+    sustento = retencion.docs_sustento.get()
+
+    assert sustento.num_doc_sustento == "001001000000012"
+    assert registro.estado == "AUTORIZADO"
+    assert retencion.total_retenido == Decimal("1.75")
+    _valida(esquemas, "ComprobanteRetencion_V2.0.0.xsd", registro.xml_sin_firma)
+
+
+def test_impuestos_y_retenciones_se_calculan(retencion):
+    """Base, tarifa y valor se completan desde el documento y el porcentaje."""
+    impuesto = retencion.docs_sustento.get().impuestos.get()
+    assert impuesto.tarifa == Decimal("15.00")
+    assert impuesto.base_imponible == Decimal("100.00")
+    assert impuesto.valor == Decimal("15.00")
+
+    aplicada = retencion.docs_sustento.get().retenciones.get()
+    assert aplicada.base_imponible == Decimal("100.00")
+    assert aplicada.valor_retenido == Decimal("1.75")      # 100 × 1,75 %
+
+
+# -------------------------------------------------------------------- admin
+
+
+@pytest.fixture
+def admin_cliente(entorno_django):
+    from django.test import Client
+
+    cliente = Client(SERVER_NAME="localhost")
+    cliente.force_login(_superusuario())
+    return cliente
+
+
+@pytest.mark.parametrize(
+    "ruta",
+    [
+        "/admin/sri_fe/cliente/",
+        "/admin/sri_fe/producto/",
+        "/admin/sri_fe/factura/",
+        "/admin/sri_fe/factura/add/",
+        "/admin/sri_fe/liquidacioncompra/",
+        "/admin/sri_fe/liquidacioncompra/add/",
+        "/admin/sri_fe/notacredito/",
+        "/admin/sri_fe/notacredito/add/",
+        "/admin/sri_fe/notadebito/",
+        "/admin/sri_fe/notadebito/add/",
+        "/admin/sri_fe/guiaremision/",
+        "/admin/sri_fe/guiaremision/add/",
+        "/admin/sri_fe/retencion/",
+        "/admin/sri_fe/retencion/add/",
+        "/admin/sri_fe/retenciondocsustento/",
+        "/admin/sri_fe/guiadestinatario/",
+    ],
+)
+def test_el_admin_responde(admin_cliente, ruta):
+    """Las páginas de listado y de alta de los comprobantes responden."""
+    assert admin_cliente.get(ruta).status_code == 200
+
+
+def test_el_admin_muestra_la_factura_con_sus_lineas(admin_cliente, factura):
+    respuesta = admin_cliente.get(f"/admin/sri_fe/factura/{factura.pk}/change/")
+
+    assert respuesta.status_code == 200
+    contenido = respuesta.content.decode()
+    assert "Servicio de desarrollo" in contenido
+    assert "280.00" in contenido       # el total calculado
+
+
+def test_el_admin_emite_la_factura(admin_cliente, factura, cliente_falso):
+    """La acción del admin emite, firma y envía: la factura queda autorizada."""
+    from factec.django import models
+
+    respuesta = admin_cliente.post("/admin/sri_fe/factura/", {
+        "action": "accion_emitir",
+        "_selected_action": [str(factura.pk)],
+    }, follow=True)
+
+    assert respuesta.status_code == 200
+    factura.refresh_from_db()
+    assert factura.autorizado is True
+    assert factura.clave_acceso == factura.comprobante.clave_acceso
+    assert models.ComprobanteEmitido.objects.count() == 1
+    # El listado muestra el estado con el que quedó.
+    assert "Autorizado" in respuesta.content.decode()
+
+
+# ------------------------------------------------------------------ detalles
+
+
+def test_emitir_reutiliza_el_borrador_pendiente(factura, cliente_falso):
+    """Un envío fallido no gasta otro secuencial."""
+    from factec.django import models
+
+    cliente_falso.estado_recepcion = "DEVUELTA"
+    primero = factura.emitir(encolar=False)
+    secuenciales = models.Secuencial.objects.count()
+    assert primero.estado == models.EstadoComprobante.DEVUELTO
+
+    cliente_falso.estado_recepcion = "RECIBIDA"
+    segundo = factura.emitir(encolar=False)
+
+    assert segundo.pk == primero.pk
+    assert models.Secuencial.objects.count() == secuenciales
+
+
+def test_el_xml_sin_firmar_se_puede_pedir_sin_emitir(factura):
+    xml = factura.xml()
+
+    assert xml.startswith("<?xml")
+    assert "<factura" in xml
+    assert "<totalSinImpuestos>250.00</totalSinImpuestos>" in xml
+
+
+def test_firmar_no_envia_nada(factura, cliente_falso):
+    xml = factura.firmar()
+
+    assert "ds:Signature" in xml
+    assert cliente_falso.llamadas == []
+
+
+def test_las_relaciones_de_django_se_leen_como_valores(factura):
+    """Regresión: un ``RelatedManager`` es invocable y se ignoraba al adaptar."""
+    from factec.django import adaptadores, facturacion
+
+    comprobante = facturacion.comprobante_de(factura)
+    lineas = adaptadores.AdaptadorFactura().detalles(factura)
+
+    assert len(comprobante.detalles) == 2
+    assert len(lineas) == 2
+    assert comprobante.detalles[0].descripcion == "Servicio de desarrollo"
+
+
+def test_el_receptor_del_paquete_sigue_funcionando(documentos, configuracion, cliente_falso):
+    """Los comprobantes del paquete conviven con un receptor cualquiera."""
+    from factec.comprobantes import Factura
+    from factec.django import conf, services
+    from factec.modelos import Detalle, Impuesto
+
+    comprobante = Factura(
+        emisor=conf.emisor(), ambiente=1, fecha_emision=HOY,
+        secuencial=services.siguiente_secuencial("01"), receptor=_receptor(),
+        detalles=[Detalle(descripcion="X", cantidad=1, precio_unitario=10,
+                          impuestos=[Impuesto(codigo_porcentaje="4")])],
+    )
+    registro = services.emitir_ahora(comprobante)
+
+    assert registro.estado == "AUTORIZADO"
+    assert RUC in registro.clave_acceso
+
+
+# ------------------------------------------- la línea se completa con el producto
+
+
+def test_el_admin_crea_la_factura_solo_con_el_producto(admin_cliente, factura, producto):
+    """Basta elegir el producto: no hay que repetir descripción, precio ni IVA."""
+    from factec.django import documentos
+
+    respuesta = admin_cliente.post("/admin/sri_fe/factura/add/", {
+        "receptor": factura.receptor_id,
+        "fecha_emision": "08/10/2026",
+        "forma_pago": "19",
+        # Una sola línea, indicando únicamente el producto y la cantidad.
+        "detalles-TOTAL_FORMS": "1",
+        "detalles-INITIAL_FORMS": "0",
+        "detalles-MIN_NUM_FORMS": "0",
+        "detalles-MAX_NUM_FORMS": "1000",
+        "detalles-0-producto": str(producto.pk),
+        "detalles-0-cantidad": "3",
+        "detalles-0-id": "",
+        "detalles-0-factura": "",
+        "_save": "Guardar",
+    }, follow=True)
+
+    assert respuesta.status_code == 200
+    nueva = documentos.Factura.objects.exclude(pk=factura.pk).get()
+    linea = nueva.detalles.get()
+    assert respuesta.redirect_chain or nueva.pk
+    assert linea.descripcion == "Servicio de desarrollo"
+    assert linea.codigo_principal == "SRV001"
+    assert linea.unidad_medida == "hora"
+    assert linea.precio_unitario == Decimal("100.000000")
+    assert linea.codigo_porcentaje_iva == "4"
+    assert linea.cantidad == Decimal("3.000000")
+    assert nueva.total == Decimal("345.00")      # 300 + 15 %
+
+
+def test_el_admin_pide_la_descripcion_si_no_hay_producto(admin_cliente, factura):
+    """Sin producto, la línea suelta necesita descripción y precio."""
+    respuesta = admin_cliente.post("/admin/sri_fe/factura/add/", {
+        "receptor": factura.receptor_id,
+        "fecha_emision": "08/10/2026",
+        "forma_pago": "19",
+        "detalles-TOTAL_FORMS": "1",
+        "detalles-INITIAL_FORMS": "0",
+        "detalles-MIN_NUM_FORMS": "0",
+        "detalles-MAX_NUM_FORMS": "1000",
+        "detalles-0-producto": "",
+        "detalles-0-cantidad": "1",
+        "detalles-0-id": "",
+        "detalles-0-factura": "",
+        "_save": "Guardar",
+    })
+
+    contenido = respuesta.content.decode()
+    assert respuesta.status_code == 200      # vuelve al formulario con el error
+    assert "Indique la descripción o elija un producto" in contenido
+
+
+def test_el_producto_sirve_sus_datos_por_el_endpoint(admin_cliente, producto):
+    """El formulario consulta los datos del producto para rellenar la línea."""
+    respuesta = admin_cliente.get(f"/admin/sri_fe/producto/{producto.pk}/datos/")
+
+    assert respuesta.status_code == 200
+    datos = respuesta.json()
+    assert datos["descripcion"] == "Servicio de desarrollo"
+    assert datos["codigo_principal"] == "SRV001"
+    assert datos["unidad_medida"] == "hora"
+    assert datos["precio_unitario"] == "100"
+    assert datos["codigo_porcentaje_iva"] == "4"
+
+
+def test_el_admin_carga_el_script_de_las_lineas(admin_cliente, factura):
+    contenido = admin_cliente.get(
+        f"/admin/sri_fe/factura/{factura.pk}/change/"
+    ).content.decode()
+
+    assert "sri_fe/js/lineas.js" in contenido
+
+
+def test_una_linea_sin_producto_conserva_su_precio(admin_cliente, factura):
+    """Si la línea no trae producto, lo escrito se respeta tal cual."""
+    from factec.django import documentos
+
+    respuesta = admin_cliente.post("/admin/sri_fe/factura/add/", {
+        "receptor": factura.receptor_id,
+        "fecha_emision": "08/10/2026",
+        "forma_pago": "19",
+        "detalles-TOTAL_FORMS": "1",
+        "detalles-INITIAL_FORMS": "0",
+        "detalles-MIN_NUM_FORMS": "0",
+        "detalles-MAX_NUM_FORMS": "1000",
+        "detalles-0-producto": "",
+        "detalles-0-descripcion": "Ajuste manual",
+        "detalles-0-cantidad": "1",
+        "detalles-0-precio_unitario": "12.5",
+        "detalles-0-codigo_porcentaje_iva": "0",
+        "detalles-0-id": "",
+        "detalles-0-factura": "",
+        "_save": "Guardar",
+    }, follow=True)
+
+    assert respuesta.status_code == 200
+    nueva = documentos.Factura.objects.exclude(pk=factura.pk).get()
+    linea = nueva.detalles.get()
+    assert linea.descripcion == "Ajuste manual"
+    assert linea.precio_unitario == Decimal("12.500000")
+    assert linea.codigo_porcentaje_iva == "0"
+    assert linea.codigo_principal == ""            # sin producto, sin código
+    assert nueva.total == Decimal("12.50")
+
+
+def test_la_linea_nueva_no_trae_precio_ni_iva_puestos(admin_cliente, factura):
+    """Una línea sin tocar no debe traer un precio 0 ni un IVA que no toque."""
+    import re
+
+    contenido = admin_cliente.get("/admin/sri_fe/factura/add/").content.decode()
+    fila = contenido[contenido.find("detalles-0-producto"):]
+
+    # El precio no viene con el 0 por omisión: o lo pone el producto, o se escribe.
+    precio = re.search(r"<input[^>]*name=\"detalles-0-precio_unitario\"[^>]*>", fila)
+    assert precio, "no se encontró el precio"
+    assert 'value="' not in precio.group(0), f"el precio debería empezar vacío: {precio.group(0)}"
+
+    # El IVA tampoco: el desplegable ofrece «el del producto» como primera opción.
+    iva = re.search(r'<select name="detalles-0-codigo_porcentaje_iva".*?</select>', fila, re.S)
+    assert iva, "no se encontró el desplegable del IVA"
+    assert '<option value="" selected>— el del producto —</option>' in iva.group(0)
+
+
+def test_una_linea_sin_iva_usa_el_del_catalogo(admin_cliente, factura):
+    """Si no se indica IVA ni hay producto, se usa el 15 % por omisión."""
+    from factec.django import documentos
+
+    admin_cliente.post("/admin/sri_fe/factura/add/", {
+        "receptor": factura.receptor_id,
+        "fecha_emision": "08/10/2026",
+        "forma_pago": "19",
+        "detalles-TOTAL_FORMS": "1",
+        "detalles-INITIAL_FORMS": "0",
+        "detalles-MIN_NUM_FORMS": "0",
+        "detalles-MAX_NUM_FORMS": "1000",
+        "detalles-0-producto": "",
+        "detalles-0-descripcion": "Servicio suelto",
+        "detalles-0-cantidad": "1",
+        "detalles-0-precio_unitario": "100",
+        "detalles-0-codigo_porcentaje_iva": "",
+        "detalles-0-id": "",
+        "detalles-0-factura": "",
+        "_save": "Guardar",
+    }, follow=True)
+
+    linea = documentos.FacturaDetalle.objects.latest("pk")
+    assert linea.codigo_porcentaje_iva == "4"      # 15 %
+    assert linea.total == Decimal("115.00")
+
+
+# ------------------------------------------------ el índice del admin, agrupado
+
+
+def _secciones(html: str) -> list:
+    """Títulos de las secciones del índice, en el orden en que salen."""
+    import re
+
+    return re.findall(r'<a href="[^"]*" class="section">([^<]+)</a>', html)
+
+
+def test_el_indice_agrupa_por_temas(admin_cliente):
+    """Configuración, catálogos, comprobantes y emisión van separados."""
+    html = admin_cliente.get("/admin/").content.decode()
+    propias = [
+        titulo for titulo in _secciones(html)
+        if titulo in ("Configuración del SRI", "Catálogos", "Comprobantes", "Emisión")
+    ]
+
+    # Las cuatro, en este orden. Las demás apps del proyecto no se tocan.
+    assert propias == ["Configuración del SRI", "Catálogos", "Comprobantes", "Emisión"]
+
+
+def test_cada_seccion_lleva_sus_modelos(admin_cliente):
+    html = admin_cliente.get("/admin/").content.decode()
+
+    def modelos_de(titulo: str) -> str:
+        trozo = html[html.find(f'class="section">{titulo}') :]
+        return trozo[: trozo.find("</table>")]
+
+    configuracion = modelos_de("Configuración del SRI")
+    assert "Configuraciones del emisor" in configuracion
+    assert "Secuenciales" in configuracion
+    assert "Facturas" not in configuracion
+
+    catalogos = modelos_de("Catálogos")
+    assert "Clientes" in catalogos and "Productos" in catalogos
+    assert "Facturas" not in catalogos
+
+    comprobantes = modelos_de("Comprobantes")
+    for nombre in ("Facturas", "Notas de crédito", "Notas de débito",
+                   "Liquidaciones de compra", "Guías de remisión",
+                   "Comprobantes de retención"):
+        assert nombre in comprobantes, f"falta {nombre}"
+    assert "Clientes" not in comprobantes
+
+    emision = modelos_de("Emisión")
+    assert "Comprobantes emitidos" in emision
+    assert "Facturas" not in emision
+
+
+def test_las_demas_apps_siguen_en_el_indice(admin_cliente):
+    """La agrupación solo afecta a la app del paquete."""
+    html = admin_cliente.get("/admin/").content.decode()
+
+    # El bloque de la app de autenticación sigue tal cual (no se agrupa).
+    assert 'class="app-auth module"' in html
+
+
+def test_sin_permisos_no_aparecen_las_secciones(admin_cliente):
+    """Un usuario sin permisos sobre la app no ve secciones vacías."""
+    from django.contrib.auth import get_user_model
+
+    limitado = get_user_model().objects.create_user(
+        username="sin_permisos", password="x", is_staff=True
+    )
+    from django.test import Client
+
+    cliente = Client(SERVER_NAME="localhost")
+    cliente.force_login(limitado)
+    html = cliente.get("/admin/").content.decode()
+
+    for titulo in ("Configuración del SRI", "Catálogos", "Comprobantes", "Emisión"):
+        assert f'class="section">{titulo}' not in html
+
+
+def test_la_portada_de_la_app_tambien_agrupa(admin_cliente):
+    """La portada /admin/sri_fe/ usa las mismas secciones."""
+    html = admin_cliente.get("/admin/sri_fe/").content.decode()
+
+    assert "Configuración del SRI" in _secciones(html)
+    assert "Comprobantes" in _secciones(html)
+
+
+def test_las_facturas_se_filtran_por_estado(admin_cliente, factura):
+    """Se puede ver de un vistazo lo que está autorizado, devuelto o pendiente."""
+    html = admin_cliente.get("/admin/sri_fe/factura/").content.decode()
+    assert "comprobante__estado" in html
+
+    # Con el filtro puesto, la página responde.
+    assert admin_cliente.get(
+        "/admin/sri_fe/factura/?comprobante__estado=AUTORIZADO"
+    ).status_code == 200
+
+
+def test_el_comprobante_emitido_enlaza_con_su_documento(admin_cliente, factura, cliente_falso):
+    """Desde la emisión se llega al documento que la originó."""
+    factura.emitir(encolar=False)
+    html = admin_cliente.get("/admin/sri_fe/comprobanteemitido/").content.decode()
+
+    assert f"/admin/sri_fe/factura/{factura.pk}/change/" in html
+
+
+# --------------------------------------- campos que no llegaban al XML
+
+
+def test_la_factura_envia_el_codigo_auxiliar(documentos, configuracion, cliente,
+                                             producto, cliente_falso, esquemas):
+    """El código auxiliar de la línea (y del producto) viaja al XML."""
+    producto.codigo_auxiliar = "001"
+    producto.save()
+
+    factura = documentos.Factura.objects.create(receptor=cliente, fecha_emision=HOY)
+    linea = factura.detalles.create(producto=producto, cantidad=1)
+    assert linea.codigo_auxiliar == "001"        # se copia del producto
+
+    registro = factura.emitir(encolar=False)
+
+    assert "<codigoPrincipal>SRV001</codigoPrincipal>" in registro.xml_sin_firma
+    assert "<codigoAuxiliar>001</codigoAuxiliar>" in registro.xml_sin_firma
+    _valida(esquemas, "factura_V1.1.0.xsd", registro.xml_sin_firma)
+
+
+def test_el_codigo_auxiliar_tambien_en_nota_de_credito_y_liquidacion(
+    documentos, configuracion, cliente, proveedor, cliente_falso, esquemas
+):
+    nota = documentos.NotaCredito.objects.create(
+        receptor=cliente, fecha_emision=HOY, motivo="Ajuste",
+        num_doc_modificado="001-001-000000001", fecha_emision_doc_sustento=HOY,
+    )
+    nota.detalles.create(descripcion="Servicio", cantidad=1, precio_unitario=10,
+                          codigo_principal="SRV001", codigo_auxiliar="999")
+    registro = nota.emitir(encolar=False)
+    # La nota de crédito nombra los códigos ``codigoInterno``/``codigoAdicional``.
+    assert "<codigoAdicional>999</codigoAdicional>" in registro.xml_sin_firma
+    _valida(esquemas, "NotaCredito_V1.1.0.xsd", registro.xml_sin_firma)
+
+    liquidacion = documentos.LiquidacionCompra.objects.create(
+        proveedor=proveedor, fecha_emision=HOY)
+    liquidacion.detalles.create(descripcion="Compra", cantidad=1, precio_unitario=50,
+                                codigo_principal="C001", codigo_auxiliar="A-9")
+    registro = liquidacion.emitir(encolar=False)
+    assert "<codigoAuxiliar>A-9</codigoAuxiliar>" in registro.xml_sin_firma
+    _valida(esquemas, "LiquidacionCompra_V1.1.0.xsd", registro.xml_sin_firma)
+
+
+def test_los_datos_adicionales_del_detalle_llegan_al_xml(
+    documentos, configuracion, cliente, cliente_falso, esquemas
+):
+    factura = documentos.Factura.objects.create(receptor=cliente, fecha_emision=HOY)
+    linea = factura.detalles.create(descripcion="Servicio", cantidad=1,
+                                     precio_unitario=10)
+    # El modelo del paquete no los tiene: se añaden por atributo, como haría
+    # un modelo propio del proyecto.
+    linea.detalles_adicionales = {"Marca": "ACME", "Modelo": "X1"}
+
+    from factec.django import adaptadores, facturacion
+
+    adaptador = adaptadores.AdaptadorFactura()
+    detalle = adaptador.detalle_desde_linea(linea, factura)
+
+    assert detalle.detalles_adicionales == {"Marca": "ACME", "Modelo": "X1"}
+    assert adaptadores._datos_adicionales([{"nombre": "A", "valor": "1"}]) == {"A": "1"}
+    assert adaptadores._datos_adicionales(None) == {}
+    assert facturacion is not None
+
+
+def test_la_guia_envia_el_documento_sustento(documentos, configuracion, cliente,
+                                             cliente_falso, esquemas):
+    guia = documentos.GuiaRemision.objects.create(
+        fecha_emision=HOY, dir_partida="PANAMERICANA Y CARCHI",
+        razon_social_transportista="TRANSPORTES DEL NORTE CÍA. LTDA.",
+        ruc_transportista="1790012345001", placa="PBX-1234",
+        fecha_ini_transporte=HOY, fecha_fin_transporte=HOY,
+    )
+    destinatario = guia.destinatarios.create(
+        razon_social=cliente.razon_social, identificacion=cliente.identificacion,
+        tipo_identificacion="04", direccion="AV. AMAZONAS 123, QUITO", motivo_traslado="01",
+        cod_doc_sustento="01", num_doc_sustento="001001000000007",
+        num_aut_doc_sustento="0810202601179001234500110010010000000071234567818",
+        fecha_emision_doc_sustento=HOY,
+    )
+    destinatario.detalles.create(descripcion="Bien", cantidad=1, codigo_principal="B1")
+
+    registro = guia.emitir(encolar=False)
+    destinatario.refresh_from_db()
+
+    assert destinatario.num_doc_sustento == "001-001-000000007"   # se normaliza
+    assert "<codDocSustento>01</codDocSustento>" in registro.xml_sin_firma
+    assert "<numDocSustento>001-001-000000007</numDocSustento>" in registro.xml_sin_firma
+    _valida(esquemas, "GuiaRemision_V1.1.0.xsd", registro.xml_sin_firma)
+
+
+def test_la_retencion_envia_pagos_al_exterior(documentos, configuracion, proveedor,
+                                              cliente_falso, esquemas):
+    retencion = documentos.Retencion.objects.create(
+        sujeto_retenido=proveedor, fecha_emision=HOY, periodo_fiscal=HOY, parte_rel="SI")
+    sustento = retencion.docs_sustento.create(
+        cod_sustento="01", cod_doc_sustento="01", num_doc_sustento="001001000000012",
+        fecha_emision=HOY, total_sin_impuestos=Decimal("100"),
+        importe_total=Decimal("115"), pago_loc_ext="02", tipo_regi="01",
+        pais_efec_pago="840", aplic_conv_dob_trib="NO", pag_ext_suj_ret_nor_leg="NO",
+    )
+    sustento.impuestos.create(codigo_porcentaje="4")
+    sustento.retenciones.create(codigo="1", codigo_retencion="312",
+                                 porcentaje_retener=Decimal("1.75"))
+
+    registro = retencion.emitir(encolar=False)
+
+    assert "<pagoLocExt>02</pagoLocExt>" in registro.xml_sin_firma
+    assert "<paisEfecPago>840</paisEfecPago>" in registro.xml_sin_firma
+    _valida(esquemas, "ComprobanteRetencion_V2.0.0.xsd", registro.xml_sin_firma)
+
+
+def test_el_documento_no_pisa_la_configuracion_del_emisor(documentos, configuracion,
+                                                          cliente, cliente_falso):
+    """Los datos de establecimiento salen del emisor; el documento puede cambiarlos."""
+    factura = documentos.Factura.objects.create(receptor=cliente, fecha_emision=HOY)
+    factura.detalles.create(descripcion="Servicio", cantidad=1, precio_unitario=10)
+
+    from factec.django import adaptadores
+
+    # Sin campos propios: se usan los de la configuración.
+    assert adaptadores.AdaptadorFactura().datos_del_establecimiento(factura) == {}
+
+    factura.contribuyente_especial = "1234"
+    assert adaptadores.AdaptadorFactura().datos_del_establecimiento(factura) == {
+        "contribuyente_especial": "1234"
+    }
+
+
+# ------------------------------------------------- campos adicionales de la tienda
+
+
+def test_los_campos_adicionales_se_escriben_y_se_leen(entorno_django):
+    from django.core.exceptions import ValidationError
+
+    from factec.django.documentos import (
+        escribir_campos_adicionales,
+        leer_campos_adicionales,
+    )
+
+    assert leer_campos_adicionales("") == {}
+    assert leer_campos_adicionales(None) == {}
+    assert leer_campos_adicionales("MARCA=ACME; LOTE=2026-01") == {
+        "MARCA": "ACME", "LOTE": "2026-01"
+    }
+    assert leer_campos_adicionales("MARCA=ACME\nLOTE=2026-01") == {
+        "MARCA": "ACME", "LOTE": "2026-01"
+    }
+    # Un diccionario (por ejemplo de un JSONField propio) también sirve.
+    assert leer_campos_adicionales({"MARCA": "ACME", "VACIO": ""}) == {"MARCA": "ACME"}
+    assert escribir_campos_adicionales({"MARCA": "ACME", "LOTE": "1"}) == "MARCA=ACME; LOTE=1"
+
+    for texto in ("MARCA", "=ACME", "MARCA=", f"{'N' * 301}=ACME"):
+        with pytest.raises(ValidationError):
+            leer_campos_adicionales(texto)
+
+
+def test_los_datos_adicionales_de_la_linea_llegan_al_xml(
+    documentos, configuracion, cliente, cliente_falso, esquemas
+):
+    """``detallesAdicionales`` de la línea viaja al SRI."""
+    factura = documentos.Factura.objects.create(receptor=cliente, fecha_emision=HOY)
+    factura.detalles.create(
+        descripcion="Servicio", cantidad=1, precio_unitario=10,
+        datos_adicionales="MARCA=ACME; LOTE=2026-01",
+    )
+
+    registro = factura.emitir(encolar=False)
+
+    assert '<detAdicional nombre="MARCA" valor="ACME"' in registro.xml_sin_firma
+    assert '<detAdicional nombre="LOTE" valor="2026-01"' in registro.xml_sin_firma
+    _valida(esquemas, "factura_V1.1.0.xsd", registro.xml_sin_firma)
+
+
+def test_la_guia_envia_los_datos_adicionales_del_bien(
+    documentos, configuracion, cliente, cliente_falso, esquemas
+):
+    guia = documentos.GuiaRemision.objects.create(
+        fecha_emision=HOY, dir_partida="PANAMERICANA Y CARCHI",
+        razon_social_transportista="TRANSPORTES DEL NORTE CÍA. LTDA.",
+        ruc_transportista="1790012345001", placa="PBX-1234",
+        fecha_ini_transporte=HOY, fecha_fin_transporte=HOY,
+    )
+    destinatario = guia.destinatarios.create(
+        razon_social=cliente.razon_social, identificacion=cliente.identificacion,
+        tipo_identificacion="04", direccion="AV. AMAZONAS 123, QUITO", motivo_traslado="01",
+    )
+    destinatario.detalles.create(
+        descripcion="Bulto", cantidad=2, codigo_principal="B1", codigo_adicional="B1-A",
+        datos_adicionales="MARCA=ACME",
+    )
+
+    registro = guia.emitir(encolar=False)
+
+    assert "<codigoAdicional>B1-A</codigoAdicional>" in registro.xml_sin_firma
+    assert '<detAdicional nombre="MARCA" valor="ACME"' in registro.xml_sin_firma
+    _valida(esquemas, "GuiaRemision_V1.1.0.xsd", registro.xml_sin_firma)
+
+
+def test_los_campos_adicionales_de_la_tienda_van_en_los_comprobantes(
+    documentos, configuracion, cliente, cliente_falso, esquemas
+):
+    """La tienda define sus campos una vez y el comprobante puede añadir o pisar."""
+    from factec.django import conf
+
+    configuracion.campos_adicionales = "VENDEDOR=JOHNNY; SUCURSAL=NORTE"
+    configuracion.save()
+    conf.limpiar_cache()
+
+    factura = documentos.Factura.objects.create(
+        receptor=cliente, fecha_emision=HOY, observaciones="Pago a 30 días",
+        informacion_adicional="VENDEDOR=MARÍA; ORDEN=1234",
+    )
+    factura.detalles.create(descripcion="Servicio", cantidad=1, precio_unitario=10)
+
+    registro = factura.emitir(encolar=False)
+    xml = registro.xml_sin_firma
+
+    assert '<campoAdicional nombre="VENDEDOR">MARÍA</campoAdicional>' in xml
+    assert '<campoAdicional nombre="SUCURSAL">NORTE</campoAdicional>' in xml
+    assert '<campoAdicional nombre="ORDEN">1234</campoAdicional>' in xml
+    assert '<campoAdicional nombre="Observaciones">Pago a 30 días</campoAdicional>' in xml
+    _valida(esquemas, "factura_V1.1.0.xsd", xml)
+
+
+def test_los_campos_adicionales_se_validan_al_guardar(documentos, configuracion, cliente):
+    """El SRI admite 3 datos por línea y 15 campos por comprobante."""
+    from django.core.exceptions import ValidationError
+
+    factura = documentos.Factura.objects.create(receptor=cliente, fecha_emision=HOY)
+    linea = documentos.FacturaDetalle(
+        factura=factura, descripcion="X", cantidad=1, precio_unitario=1,
+        datos_adicionales="A=1; B=2; C=3; D=4",
+    )
+    with pytest.raises(ValidationError) as error:
+        linea.full_clean()
+    assert "datos_adicionales" in error.value.message_dict
+
+    linea.datos_adicionales = "MARCA"
+    with pytest.raises(ValidationError) as error:
+        linea.full_clean()
+    assert "datos_adicionales" in error.value.message_dict
+
+    linea.datos_adicionales = "A=1; B=2; C=3"
+    linea.full_clean()
+
+    configuracion.campos_adicionales = "; ".join(f"C{numero}=x" for numero in range(16))
+    with pytest.raises(ValidationError) as error:
+        configuracion.full_clean()
+    assert "campos_adicionales" in error.value.message_dict
+
+
+def test_el_admin_ofrece_los_campos_adicionales(admin_cliente, factura, producto):
+    respuesta = admin_cliente.get(f"/admin/sri_fe/factura/{factura.pk}/change/")
+    contenido = respuesta.content.decode()
+
+    assert "informacion_adicional" in contenido     # campos del comprobante
+    assert "datos_adicionales" in contenido         # datos de cada línea
+    assert respuesta.status_code == 200
+
+
+def test_el_chequeo_avisa_de_migraciones_pendientes(configuracion, monkeypatch):
+    """Con la base de datos a medias, el aviso es «migre», no «ninguna activa».
+
+    Al actualizar el paquete se añaden columnas a la tabla de configuraciones;
+    ``migrate`` lanza los chequeos antes de crearlas.
+    """
+    from django.db import connection
+
+    from factec.django import checks, conf
+
+    monkeypatch.setattr(conf, "configuracion_activa", lambda *a, **k: None)
+    original = connection.introspection.get_table_description
+    monkeypatch.setattr(
+        connection.introspection, "get_table_description",
+        lambda cursor, tabla, *resto, **extra: original(cursor, tabla, *resto, **extra)[:-1],
+    )
+
+    codigos = {problema.id for problema in checks.comprobar_configuracion()}
+
+    assert "sri_fe.W008" in codigos
+    assert "sri_fe.E009" not in codigos
