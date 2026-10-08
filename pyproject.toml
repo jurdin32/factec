@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "factec contributors" }]
+authors = [{ name = "jurdin32", email = "jurdin32@users.noreply.github.com" }]
 keywords = ["sri", "ecuador", "facturacion", "electronica", "xades", "comprobantes"]
 classifiers = [
   "Development Status :: 4 - Beta",
@@ -36,8 +36,10 @@ django = ["Django>=4.2", "celery>=5.3"]
 dev = ["pytest>=7.0", "pytest-cov", "signxml>=3.0", "Django>=4.2", "celery>=5.3"]
 
 [project.urls]
-Homepage = "https://github.com/example/factec"
-Documentation = "https://github.com/example/factec#readme"
+Homepage = "https://github.com/jurdin32/factec"
+Documentation = "https://github.com/jurdin32/factec#readme"
+Repositorio = "https://github.com/jurdin32/factec.git"
+Seguimiento = "https://github.com/jurdin32/factec/issues"
 
 [project.scripts]
 sri-fe = "factec.__main__:main"
