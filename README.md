@@ -251,6 +251,7 @@ workers conectados y sus colas. El paquete lo trae como extra:
 pip install "factec[django,flower]"
 
 # el worker tiene que enviar los eventos de las tareas, si no Flower no las ve
+# (o ponga CELERY_WORKER_SEND_TASK_EVENTS = True en settings.py y olvídese del -E)
 celery -A mi_proyecto worker -l info -c 4 -E
 
 celery -A mi_proyecto flower --address=127.0.0.1 --port=5555    # panel
@@ -511,7 +512,7 @@ informe.certificado.nombre, informe.certificado.vencido()
 | [docs/django.md](docs/django.md) | La app de Django: modelos, admin, adaptadores, Celery y ajustes |
 | [docs/flower.md](docs/flower.md) | El panel de Celery: pantallas, cómo seguir una factura y qué mirar cuando algo falla |
 | [docs/prueba-real.md](docs/prueba-real.md) | Emitir de verdad contra el ambiente de pruebas del SRI |
-| [examples/](examples/) | Scripts listos para ejecutar |
+| [examples/](examples/) | Scripts listos para ejecutar (incluye `celery.py` para copiar) |
 | [tests/](tests/) | 515 pruebas, incluida la validación contra los XSD oficiales |
 
 ---

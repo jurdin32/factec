@@ -999,6 +999,72 @@ Celery es **opcional**:
 * **Con Celery** la emisión va a la cola y la respuesta es inmediata; el
   comprobante queda en `BORRADOR` y el worker lo va actualizando.
 
+#### Configurarlo paso a paso
+
+Cuatro pasos, y todos los nombres se sustituyen por los de su proyecto
+(«`mi_proyecto`»). Hay una copia lista para empezar en
+[examples/celery.py](../examples/celery.py).
+
+**1. El archivo `celery.py`** (el único que no viene hecho):
+
+```python
+# mi_proyecto/celery.py
+import os
+
+# En macOS y Windows el pool usa «spawn» y sin esta variable las tareas fallan al
+# ejecutarse («ValueError: not enough values to unpack»).
+os.environ.setdefault("FORKED_BY_MULTIPROCESSING", "1")
+
+from celery import Celery  # noqa: E402
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "mi_proyecto.settings")
+
+app = Celery("mi_proyecto")
+app.config_from_object("django.conf:settings", namespace="CELERY")
+app.autodiscover_tasks()      # registra las tareas de factec.django
+```
+
+**2. Cargarlo al arrancar el proyecto** (`mi_proyecto/__init__.py`), para que
+`celery -A mi_proyecto` lo encuentre:
+
+```python
+from .celery import app as celery_app
+
+__all__ = ("celery_app",)
+```
+
+**3. Los ajustes** (`settings.py`):
+
+```python
+from factec.django.conf import planificador
+
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
+CELERY_TIMEZONE = TIME_ZONE                        # la hora de las tareas periódicas
+CELERY_WORKER_SEND_TASK_EVENTS = True              # alimenta el panel de Flower
+CELERY_TASK_SEND_SENT_EVENT = True                 # que se vean como PENDING
+CELERY_BEAT_SCHEDULE = {**planificador()}          # revisión diaria y reintentos
+```
+
+**4. Los servicios** (Linux: `sudo python manage.py servicios_celery`):
+
+```bash
+redis-server
+celery -A mi_proyecto worker -l info -c 4
+celery -A mi_proyecto beat -l info                 # tareas periódicas
+celery -A mi_proyecto flower                       # panel
+```
+
+| Ajuste de Django | Para qué | Por omisión |
+|---|---|---|
+| `CELERY_BROKER_URL` | El broker (Redis). Con clave: `redis://:clave@127.0.0.1:6379/0` | sin definir: el paquete emite en síncrono |
+| `CELERY_TIMEZONE` | Zona de las tareas periódicas; póngala igual que `TIME_ZONE` | la del sistema |
+| `CELERY_WORKER_SEND_TASK_EVENTS` | Envía los eventos de las tareas (lo que ve Flower); equivale a `-E` | `False` |
+| `CELERY_TASK_SEND_SENT_EVENT` | Que las tareas se vean como `PENDING` en cuanto entran | `False` |
+| `CELERY_BEAT_SCHEDULE` | Tareas periódicas: `planificador()` trae la revisión de la firma y el reintento | vacío: nada periódico |
+| `CELERY_QUEUE` (del paquete) | Cola donde encolar (si el worker escucha una concreta) | la del proyecto |
+| `CELERY_PREFIX` (del paquete) | Prefijo de los nombres de tarea (`sri_fe.…`) | `sri_fe` |
+| `EMITIR_CON_CELERY` (del paquete) | `True`: `emitir()` encola. `False`: emite en síncrono | `True` |
+
 El paquete no impone una app de Celery: hay que crear la del proyecto, como en
 cualquier Django. Es el único paso que no viene hecho.
 
@@ -1176,8 +1242,8 @@ FACTURACION_ELECTRONICA = {
     "REINTENTOS_AUTORIZACION": 6,
     "ESPERA_AUTORIZACION": 4.0,
     "GUARDAR_XML": True,              # guardar los XML en la base de datos
-    "CELERY_QUEUE": "facturacion",     # cola para las tareas
-    "CELERY_PREFIX": "sri_fe",
+    "CELERY_QUEUE": "facturacion",     # cola para las tareas (ver «Celery»)
+    "CELERY_PREFIX": "sri_fe",         # prefijo de los nombres de tarea
     "TIMEOUT": 30.0,
     "TIMEOUT_CONSULTA_SRI": 15.0,      # espera máxima al consultar el RUC
     "CONSULTAR_SRI_AUTOMATICAMENTE": True,
@@ -1190,6 +1256,10 @@ FACTURACION_ELECTRONICA = {
     "CORREOS_AVISO": [],              # a quién avisar de los problemas de la firma
 }
 ```
+
+Los ajustes de Celery (`CELERY_BROKER_URL`, `CELERY_BEAT_SCHEDULE`,
+`CELERY_TIMEZONE`, `CELERY_WORKER_SEND_TASK_EVENTS`…) son de Django, no del
+paquete: están explicados en [Configurarlo paso a paso](#configurarlo-paso-a-paso).
 
 También se puede usar el paquete **sin** base de datos, definiendo `EMISOR` y
 `CERTIFICADO` en los ajustes (útil en pruebas).
