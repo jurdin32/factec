@@ -313,7 +313,45 @@ sri-fe fecha salida/factura.xml --fecha 2026-10-08 --salida factura_hoy.xml
 
 sri-fe autorizar 0810202601179001234500110010010000000011234567819 --ambiente pruebas
 sri-fe enviar salida/factura_firmado.xml --ambiente pruebas
+
+sri-fe actualizacion                               # ¿hay versión nueva? (10 si la hay)
+sri-fe actualizacion --forzar --json               # mira ahora, en JSON
 ```
+
+### Aviso de versión
+
+Al terminar cualquier comando, `sri-fe` cuenta si hay una versión nueva del
+paquete (o si se acaba de actualizar), sin salir a la red y sin cambiar el
+resultado del comando: solo escribe en la salida de errores.
+
+```
+╔═══════════════════════════════════════════════════════════════════════════╗
+║ ↑  Hay una versión nueva de factec                                        ║
+║                                                                           ║
+║ Instalada   1.10.1                                                        ║
+║ Disponible  1.11.0                                                        ║
+║                                                                           ║
+║ Para actualizar:                                                          ║
+║   pip install -U "factec @ git+https://github.com/jurdin32/factec.git"    ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+```
+
+Lo que decide es `factec.actualizacion`, que guarda lo último comprobado en
+`~/.cache/factec/actualizacion.json` (24 horas de validez). Los comandos que
+sí salen a la red son `sri-fe actualizacion`, `manage.py comprobar_actualizacion`
+y la tarea semanal `sri_fe.comprobar_actualizacion`.
+
+```python
+from factec.actualizacion import actualizacion_disponible, comprobar, esta_al_dia, ultima_conocida
+
+comprobar()                 # sale a la red (o usa lo guardado, si es de hoy)
+esta_al_dia(), actualizacion_disponible(), ultima_conocida()
+```
+
+Se apaga con `FACTEC_SIN_AVISOS=1` (no enseñar nada) y con `FACTEC_SIN_COMPROBAR=1`
+(no salir a la red). `FACTEC_REPOSITORIO=usuario/repo` mira otro repositorio y
+`FACTEC_CACHE_DIR=...` guarda el estado en otro sitio. Nada de esto lanza
+excepciones: sin internet, el paquete sigue funcionando igual.
 
 `verificar` usa el certificado que va dentro del XML, así que para comprobantes
 de terceros no hace falta indicar nada. El informe completo se imprime en JSON

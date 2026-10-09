@@ -33,12 +33,21 @@ class FactecConfig(AppConfig):
         cuanto la app se añade a ``INSTALLED_APPS`` si falta algún dato, y el menú
         del admin muestra la configuración, los catálogos, los comprobantes y la
         emisión en secciones separadas.
+
+        Además, si esta versión del paquete es nueva respecto a la última que se
+        ejecutó, se enseña el aviso de actualización (ver
+        :mod:`factec.actualizacion`).
         """
         from django.apps import apps
 
+        from .. import actualizacion
         from . import checks  # noqa: F401  (el import registra los checks)
 
         if apps.is_installed("django.contrib.admin"):
             from . import admin_agrupado
 
             admin_agrupado.organizar_el_indice()
+
+        # Si se acaba de actualizar el paquete, se cuenta una vez (y solo con una
+        # terminal detrás: no ensucia los registros del servidor).
+        actualizacion.avisar_en_arranque()

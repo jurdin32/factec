@@ -635,6 +635,38 @@ archivos.ruta_de(registro, "firmado.xml")
 archivos.archivos_del_registro(registro)   # [{nombre, ruta, relativa, bytes}]
 ```
 
+#### Saber si hay una versión nueva del paquete
+
+El paquete avisa por su cuenta (recuadro al estilo de Flutter) al arrancar Django
+la primera vez después de actualizar, y al terminar cualquier comando de `sri-fe`.
+Además están estas herramientas:
+
+```bash
+python manage.py comprobar_actualizacion              # mira y lo deja anotado
+python manage.py comprobar_actualizacion --forzar     # aunque ya se miró hoy
+python manage.py comprobar_actualizacion --json       # para el cron o un script
+python manage.py comprobar_actualizacion --instalar   # además la instala con pip
+python manage.py comprobar_actualizacion --olvidar    # borra lo guardado y mira
+```
+
+Sale con código **10** cuando hay versión nueva (0 si está al día o no se pudo
+comprobar), así que sirve en un cron:
+
+```bash
+0 7 * * 1  cd /srv/facturero && venv/bin/python manage.py comprobar_actualizacion || echo "hay versión nueva"
+```
+
+| Pieza | Qué hace |
+|---|---|
+| `sri_fe.W011` en `manage.py check` | Avisa de la versión nueva leyendo **lo guardado**: la comprobación del sistema nunca sale a la red |
+| `sri_fe.comprobar_actualizacion` | Tarea de Celery; `planificador()` la programa **los lunes a las 7:00** (o sin Celery, cada 7 días) |
+| `~/.cache/factec/actualizacion.json` | Lo último comprobado, válido 24 horas (`FACTEC_CACHE_DIR` para cambiarlo) |
+| `FACTEC_SIN_AVISOS=1` / `FACTEC_SIN_COMPROBAR=1` | Sin avisos / sin salir a la red |
+
+Si prefiere no tener ningún aviso, con `FACTEC_SIN_AVISOS=1` en el entorno del
+servicio (el `.env` de los servicios de systemd sirve) no aparece ni el recuadro
+ni el `sri_fe.W011`.
+
 #### Comprobantes anteriores
 
 Si los comprobantes se emitieron antes de activar los archivos, o si se perdió la

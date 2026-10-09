@@ -38,6 +38,7 @@ __all__ = [
     "NOMBRE_EMITIR_COMPROBANTE",
     "NOMBRE_CONSULTAR_AUTORIZACION",
     "NOMBRE_REINTENTAR_PENDIENTES",
+    "NOMBRE_COMPROBAR_ACTUALIZACION",
     "NOMBRE_REVISAR_CERTIFICADO",
     "emitir_comprobante",
     "consultar_autorizacion",
@@ -49,6 +50,7 @@ NOMBRE_EMITIR_COMPROBANTE = conf.nombre_tarea("emitir_comprobante")
 NOMBRE_CONSULTAR_AUTORIZACION = conf.nombre_tarea("consultar_autorizacion")
 NOMBRE_REINTENTAR_PENDIENTES = conf.nombre_tarea("reintentar_pendientes")
 NOMBRE_REVISAR_CERTIFICADO = conf.nombre_tarea("revisar_certificado")
+NOMBRE_COMPROBAR_ACTUALIZACION = conf.nombre_tarea("comprobar_actualizacion")
 
 #: Estados que se recuperan con la tarea periódica.
 ESTADOS_A_RECUPERAR = (
@@ -149,3 +151,23 @@ def reintentar_pendientes(limite: int = 50) -> List[Dict[str, Any]]:
             logger.warning("No se pudo reintentar el comprobante %s: %s", registro.pk, exc)
         resultados.append(_resumen(registro))
     return resultados
+
+
+@shared_task(name=NOMBRE_COMPROBAR_ACTUALIZACION, ignore_result=True)
+def comprobar_actualizacion() -> str:
+    """Mira si hay una versión nueva del paquete y la deja anotada.
+
+    La programación semanal la pone ``planificador()``. El resultado se guarda
+    (``~/.cache/factec/actualizacion.json``) y es lo que usan ``manage.py check``
+    (``sri_fe.W011``) y el aviso de la consola. Si no hay internet, **no** falla la
+    cola: se anota y se sigue.
+    """
+    from .. import actualizacion
+
+    try:
+        informe = actualizacion.comprobar(forzar=True)
+    except Exception as exc:  # noqa: BLE001 - un aviso no puede tumbar el worker
+        logger.warning("No se pudo comprobar si hay versiones nuevas: %s", exc)
+        return ""
+    logger.info("Comprobación de versión: %s", informe)
+    return str(informe)

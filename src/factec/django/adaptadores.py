@@ -110,6 +110,7 @@ __all__ = [
     "AdaptadorLiquidacionCompra",
     "Adaptadores",
     "registrar",
+    "registrar_los_del_paquete",
     "registrar_para",
     "adaptador_para",
     "obtener",
@@ -1015,7 +1016,22 @@ class Adaptadores:
             return self._por_tipo[tipo]
         return AdaptadorFactura
 
+    def sabe_de(self, modelo: Any) -> bool:
+        """¿El registro tiene algo para este modelo?"""
+        if isinstance(modelo, str):
+            return modelo in self._por_clase
+        if hasattr(modelo, "_meta"):
+            clave = f"{modelo._meta.app_label}.{modelo._meta.object_name}"
+            if clave in self._por_clase:
+                return True
+        return isinstance(modelo, type) and modelo in self._por_clase
+
     def limpiar(self) -> None:
+        """Olvida lo registrado (los proyectos la usan para poner los suyos).
+
+        Deja también fuera los seis del paquete: vuelven solos la próxima vez que
+        se pida un adaptador (ver :func:`obtener`).
+        """
         self._por_clase.clear()
 
 
@@ -1043,9 +1059,38 @@ def registrar_para(modelo: Any) -> Callable[[Type[AdaptadorComprobante]], Type[A
     return decorador
 
 
+def _es_del_paquete(modelo: Any) -> bool:
+    """¿Es uno de los seis modelos que trae el paquete?"""
+    meta = getattr(modelo, "_meta", None)
+    return meta is not None and getattr(meta, "app_label", "") == "sri_fe"
+
+
+def registrar_los_del_paquete() -> None:
+    """Vuelve a registrar los adaptadores de los seis modelos del paquete.
+
+    Hace falta porque ``registro.limpiar()`` los borra: quien la usa para poner
+    los suyos puede olvidarse de devolverlos, y entonces una nota de crédito se
+    emitiría como factura (el adaptador por omisión) sin avisar.
+    """
+    try:
+        from . import documentos
+
+        documentos.registrar_adaptadores()
+    except Exception:  # noqa: BLE001 - sin Django configurado no hay nada que registrar
+        return
+
+
 def obtener(modelo: Any, tipo: Optional[str] = None) -> Type[AdaptadorComprobante]:
-    """Adaptador que corresponde a un modelo o a un tipo de comprobante."""
-    return registro.obtener(modelo, tipo)
+    """Adaptador que corresponde a un modelo o a un tipo de comprobante.
+
+    Si el registro se ha vaciado (``registro.limpiar()``) se devuelven a su sitio
+    los del paquete antes de caer en :class:`AdaptadorFactura`.
+    """
+    adaptador = registro.obtener(modelo, tipo)
+    if adaptador is AdaptadorFactura and _es_del_paquete(modelo) and not registro.sabe_de(modelo):
+        registrar_los_del_paquete()
+        adaptador = registro.obtener(modelo, tipo)
+    return adaptador
 
 
 #: Alias en español, por comodidad.

@@ -2126,7 +2126,11 @@ def test_el_planificador_trae_las_tareas_periodicas():
     plan = conf.planificador()
     plan_pronto = conf.planificador(a_las=6, minuto=30, cada_pendientes=120)
 
-    assert set(plan) == {"sri_fe.revisar_certificado", "sri_fe.reintentar_pendientes"}
+    assert set(plan) == {
+        "sri_fe.revisar_certificado",
+        "sri_fe.reintentar_pendientes",
+        "sri_fe.comprobar_actualizacion",
+    }
     assert plan["sri_fe.revisar_certificado"]["task"] == "sri_fe.revisar_certificado"
 
     # La revisión de la firma va a una hora concreta (7:00 por omisión) y el
@@ -2143,6 +2147,16 @@ def test_el_planificador_trae_las_tareas_periodicas():
 
     assert plan["sri_fe.reintentar_pendientes"]["schedule"] == 600.0
     assert plan_pronto["sri_fe.reintentar_pendientes"]["schedule"] == 120
+
+    # La comprobación de versión es semanal (los lunes, a la misma hora).
+    if "celery" in sys.modules or importlib.util.find_spec("celery"):
+        from celery.schedules import crontab
+
+        assert plan["sri_fe.comprobar_actualizacion"]["schedule"] == crontab(
+            minute=0, hour=7, day_of_week=1
+        )
+    else:
+        assert plan["sri_fe.comprobar_actualizacion"]["schedule"] == 7 * 86400.0
 
 
 def test_el_admin_avisa_cuando_la_firma_impide_emitir(

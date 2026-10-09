@@ -214,6 +214,51 @@ que refechar)»** los localiza de un vistazo.
 
 ---
 
+### Saber si hay una versión nueva
+
+El paquete avisa solo, con el recuadro al estilo de Flutter: al terminar cualquier
+comando de `sri-fe` y en el primer `manage.py` que se ejecute después de
+actualizar.
+
+```
+╔═══════════════════════════════════════════════════════════════════════════╗
+║ ↑  Hay una versión nueva de factec                                        ║
+║                                                                           ║
+║ Instalada   1.10.1                                                        ║
+║ Disponible  1.11.0                                                        ║
+║                                                                           ║
+║ Para actualizar:                                                          ║
+║   pip install -U "factec @ git+https://github.com/jurdin32/factec.git"    ║
+║                                                                           ║
+║ Qué cambia: https://github.com/jurdin32/factec/compare/v1.10.1...v1.11.0 ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+```
+
+Para preguntarlo a propósito (y que lo diga siempre, aunque esté al día):
+
+```bash
+sri-fe actualizacion                         # mira y lo cuenta (código 10 si hay nueva)
+sri-fe actualizacion --forzar                # aunque ya se miró hoy
+python manage.py comprobar_actualizacion     # lo mismo, desde Django
+python manage.py comprobar_actualizacion --instalar   # y la instala con pip
+python manage.py comprobar_actualizacion --json       # para un script o el cron
+```
+
+Cómo se comporta, para que no haya sorpresas:
+
+* **La red la toca solo quien la pide**: esos comandos y la tarea semanal de Celery
+  (`sri_fe.comprobar_actualizacion`, los lunes a las 7:00 con `planificador()`).
+  Todo lo demás lee lo guardado en `~/.cache/factec/actualizacion.json`, que vale
+  24 horas: sin internet no hay espera, ni error, ni aviso.
+* **`manage.py check` avisa** con `sri_fe.W011` (y lo repite el `runserver`), leyendo
+  lo guardado: la comprobación del sistema nunca sale a la red.
+* **Se puede apagar**: `FACTEC_SIN_AVISOS=1` (nada de avisos) y
+  `FACTEC_SIN_COMPROBAR=1` (no salir a la red). También `NO_COLOR=1` para los colores,
+  que de todos modos se apagan solos si la salida no es una terminal.
+* **`pip` no puede enseñarlo él mismo**: pip no ejecuta código del paquete después
+  de instalar, así que el recuadro aparece la primera vez que se usa el paquete
+  nuevo (que es cuando importa) y no en la salida de `pip install -U`.
+
 ## Servicios que hay que levantar
 
 | Servicio | ¿Obligatorio? | Comando |
@@ -540,7 +585,7 @@ informe.certificado.nombre, informe.certificado.vencido()
 | [docs/flower.md](docs/flower.md) | El panel de Celery: pantallas, cómo seguir una factura y qué mirar cuando algo falla |
 | [docs/prueba-real.md](docs/prueba-real.md) | Emitir de verdad contra el ambiente de pruebas del SRI |
 | [examples/](examples/) | Scripts listos para ejecutar (incluye `celery.py` para copiar) |
-| [tests/](tests/) | 527 pruebas, incluida la validación contra los XSD oficiales |
+| [tests/](tests/) | 572 pruebas, incluida la validación contra los XSD oficiales |
 
 ---
 

@@ -20,7 +20,7 @@ from ..excepciones import ErrorFacturacion
 from ..revision import DIAS_AVISO_CERTIFICADO, revisar_certificado
 from . import conf
 
-__all__ = ["comprobar_configuracion"]
+__all__ = ["comprobar_configuracion", "comprobar_version"]
 
 ETIQUETA = "factec"
 
@@ -34,8 +34,31 @@ ID_VIGENCIA_AVISO = "sri_fe.W010"
 ID_RUC = "sri_fe.E007"
 ID_TABLAS = "sri_fe.W008"
 ID_ACTIVA = "sri_fe.E009"
+ID_VERSION = "sri_fe.W011"
 
 AYUDA_ADMIN = "Admin de Django → Facturación electrónica (SRI) → Configuraciones del emisor."
+
+
+@register(ETIQUETA)
+def comprobar_version(app_configs: Any = None, **kwargs: Any) -> List[Any]:
+    """Avisa si el paquete instalado no es el último.
+
+    Se lee **solo lo ya comprobado** (``manage.py comprobar_actualizacion``, ``sri-fe
+    actualizacion`` o la tarea ``sri_fe.comprobar_actualizacion``): comprobar el
+    sistema no sale a la red. Si nunca se ha comprobado, no se dice nada.
+    """
+    from .. import actualizacion
+
+    if actualizacion.sin_avisos() or not actualizacion.actualizacion_disponible():
+        return []
+    return [
+        Warning(
+            f"Hay una versión nueva de factec: {actualizacion.ultima_conocida()} "
+            f"(tiene {actualizacion.version_instalada()} instalada).",
+            hint=f"Actualice cuando pueda con: {actualizacion.comando_para_actualizar()}",
+            id=ID_VERSION,
+        )
+    ]
 
 
 @register(ETIQUETA)
@@ -273,3 +296,4 @@ def _comprobar_certificado(activa: Any, problemas: List[Any]) -> None:
                 id=ID_RUC,
             )
         )
+

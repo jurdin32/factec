@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import date
 from decimal import Decimal
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import __version__
+from . import actualizacion
 from .catalogos import (
     DESCRIPCION_FORMA_PAGO,
     DESCRIPCION_MOTIVO_TRASLADO,
@@ -243,6 +245,31 @@ def cmd_fecha(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_actualizacion(args: argparse.Namespace) -> int:
+    """Dice si hay una versión nueva del paquete."""
+    if args.olvidar:
+        actualizacion.olvidar()
+    informe = actualizacion.comprobar(forzar=bool(args.forzar or args.olvidar))
+    if args.json:
+        print(json.dumps(
+            {
+                "instalada": informe.instalada,
+                "ultima": informe.ultima,
+                "hay_actualizacion": informe.hay_actualizacion,
+                "acaba_de_actualizarse": informe.acaba_de_actualizarse,
+                "comprobado": informe.comprobado.isoformat() if informe.comprobado else None,
+                "desde_guardado": informe.desde_guardado,
+                "comando": actualizacion.comando_para_actualizar(),
+                "error": informe.error,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ))
+        return 10 if informe.hay_actualizacion else 0
+    actualizacion.avisar(informe)
+    return 10 if informe.hay_actualizacion else 0
+
+
 def cmd_leer(args: argparse.Namespace) -> int:
     """Muestra los datos del comprobante que hay en un XML."""
     xml = Path(args.archivo).read_text(encoding="utf-8")
@@ -379,8 +406,11 @@ def construir_parser() -> argparse.ArgumentParser:
         prog="sri-fe",
         description="Facturación electrónica de Ecuador (SRI): clave de acceso, XML, firma y envío.",
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    sub = parser.add_subparsers(dest="comando", required=True)
+    parser.add_argument("--version", action="store_true",
+                        help="Muestra la versión y avisa si hay una más nueva")
+    parser.add_argument("--sin-avisos", action="store_true",
+                        help="No avisar de versiones nuevas en esta ejecución")
+    sub = parser.add_subparsers(dest="comando")
 
     p = sub.add_parser("catalogos", help="Muestra las tablas de códigos del SRI")
     p.add_argument("--json", action="store_true", help="Salida en JSON")
@@ -442,6 +472,14 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="Muestra el XML y su clave en JSON")
     p.set_defaults(func=cmd_fecha)
 
+    p = sub.add_parser("actualizacion", help="¿Hay una versión nueva de factec?")
+    p.add_argument("--forzar", action="store_true",
+                   help="Mira ahora, aunque lo guardado sea de hoy")
+    p.add_argument("--olvidar", action="store_true",
+                   help="Borra lo guardado y vuelve a mirar")
+    p.add_argument("--json", action="store_true", help="En JSON, para scripts")
+    p.set_defaults(func=cmd_actualizacion)
+
     p = sub.add_parser("leer", help="Muestra los datos del comprobante que hay en un XML")
     p.add_argument("archivo", help="XML del comprobante (propio o de un proveedor)")
     p.add_argument("--json", action="store_true", help="Imprime todo en JSON")
@@ -466,6 +504,12 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("--ambiente", type=_ambiente, default=Ambiente.PRUEBAS)
     p.set_defaults(func=cmd_ejemplo)
 
+    # ``--sin-avisos`` vale delante o detrás del subcomando: con SUPPRESS, el
+    # subparser no pisa lo que ya se leyó arriba.
+    for accion in sub.choices.values():
+        accion.add_argument("--sin-avisos", action="store_true", default=argparse.SUPPRESS,
+                            help=argparse.SUPPRESS)
+
     return parser
 
 
@@ -473,14 +517,32 @@ def main(argv: Optional[List[str]] = None) -> int:
     """Punto de entrada de la CLI."""
     parser = construir_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "sin_avisos", False):
+        os.environ["FACTEC_SIN_AVISOS"] = "1"
+
+    if args.version:
+        print(f"{parser.prog} {__version__}")
+        actualizacion.avisar(automatico=True)
+        return 0
+
+    if getattr(args, "func", None) is None:
+        parser.print_help()
+        return 2
+
     try:
-        return int(args.func(args))
+        codigo = int(args.func(args))
     except ErrorFacturacion as exc:
         print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 1
+        codigo = 1
     except KeyboardInterrupt:
         print("\nInterrumpido.", file=sys.stderr)
         return 130
+
+    # Como Flutter: al terminar, si hay algo que contar (versión nueva o que se
+    # acaba de actualizar), se cuenta. Nunca sale a la red ni cambia el resultado.
+    if not args.version and getattr(args, "func", None) is not cmd_actualizacion:
+        actualizacion.avisar(automatico=True)
+    return codigo
 
 
 if __name__ == "__main__":

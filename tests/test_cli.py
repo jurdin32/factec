@@ -118,15 +118,21 @@ class TestFirmarYVerificar:
 
 class TestParser:
     def test_sin_comando(self, capsys):
-        with pytest.raises(SystemExit):
-            main([])
+        """Sin comando sale la ayuda (y código 2, como argparse)."""
+        assert main([]) == 2
+        assert "usage: sri-fe" in capsys.readouterr().out
 
     def test_version(self, capsys):
         from factec import __version__
 
-        with pytest.raises(SystemExit):
-            main(["--version"])
-        assert __version__ in capsys.readouterr().out
+        assert main(["--version"]) == 0
+        assert f"sri-fe {__version__}" in capsys.readouterr().out
+
+    def test_sin_avisos(self, capsys):
+        """El aviso de versión se puede apagar (delante o detrás del comando)."""
+        assert main(["--sin-avisos", "catalogos"]) == 0
+        assert main(["catalogos", "--sin-avisos"]) == 0
+        assert capsys.readouterr().err == ""
 
     def test_ambiente_invalido(self, capsys):
         with pytest.raises(SystemExit):

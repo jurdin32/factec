@@ -330,20 +330,17 @@ class TestOtrosTipos:
 
 
 class TestRegistro:
-    def test_registra_y_recupera_un_adaptador(self):
+    def test_registra_y_recupera_un_adaptador(self, registro_limpio):
         class AdaptadorPropio(adaptadores.AdaptadorFactura):
             pass
 
         class Modelo:
             pass
 
-        adaptadores.registro.limpiar()
         adaptadores.registrar(Modelo, AdaptadorPropio)
         assert adaptadores.obtener(Modelo) is AdaptadorPropio
-        adaptadores.registro.limpiar()
 
-    def test_por_defecto_factura(self):
-        adaptadores.registro.limpiar()
+    def test_por_defecto_factura(self, registro_limpio):
         assert adaptadores.obtener(int) is adaptadores.AdaptadorFactura
 
     def test_por_tipo_de_comprobante(self):
@@ -421,10 +418,21 @@ class MiVenta:
 
 @pytest.fixture
 def registro_limpio():
-    """Vacía el registro de adaptadores antes y después de cada prueba."""
+    """Vacía el registro antes y después de cada prueba, y lo deja como estaba.
+
+    Al terminar se vuelven a registrar los del paquete: si no, las pruebas que
+    vengan después (en otro archivo) se encontrarían un registro vacío y emitirían
+    todo como factura.
+    """
     adaptadores.registro.limpiar()
     yield adaptadores.registro
     adaptadores.registro.limpiar()
+    try:
+        from factec.django import documentos
+
+        documentos.registrar_adaptadores()
+    except Exception:  # noqa: BLE001 - con Django sin configurar no hay nada que devolver
+        pass
 
 
 def test_registrar_sirve_como_decorador(registro_limpio):

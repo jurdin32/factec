@@ -185,6 +185,9 @@ def _configuracion_emisor(**campos: Any):
 
 _TEMPORAL = tempfile.mkdtemp(prefix="sri_fe_tests_")
 
+#: El estado del aviso de versión nunca es el de la máquina que ejecuta las pruebas.
+os.environ.setdefault("FACTEC_CACHE_DIR", os.path.join(_TEMPORAL, "estado_de_version"))
+
 RUC = "0703886697001"
 
 
@@ -236,6 +239,22 @@ def _configurar_django() -> None:
         ],
         LOGGING_CONFIG=None,
     )
+
+
+@pytest.fixture(autouse=True)
+def sin_noticias_de_version(monkeypatch):
+    """Aísla el aviso de versión: ni el estado de la máquina ni la red.
+
+    Las pruebas que quieran «saber» de una versión nueva escriben con
+    ``factec.actualizacion.guardar(ultima=...)``.
+    """
+    from factec import actualizacion
+
+    monkeypatch.setenv("FACTEC_CACHE_DIR", os.path.join(_TEMPORAL, "estado_de_version"))
+    monkeypatch.delenv("FACTEC_SIN_AVISOS", raising=False)
+    monkeypatch.delenv("FACTEC_SIN_COMPROBAR", raising=False)
+    monkeypatch.delenv("FACTEC_REPOSITORIO", raising=False)
+    actualizacion.olvidar()
 
 
 @pytest.fixture(scope="session")
