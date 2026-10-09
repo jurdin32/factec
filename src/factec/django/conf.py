@@ -264,26 +264,38 @@ def celery_queue() -> Optional[str]:
 
 def planificador(
     *,
-    cada_certificado: float = 86400.0,
+    a_las: int = 7,
+    minuto: int = 0,
     cada_pendientes: float = 600.0,
 ) -> Dict[str, Any]:
     """Tareas periódicas de Celery listas para ``CELERY_BEAT_SCHEDULE``.
 
-    Con esto queda **programada** en el paquete la revisión del certificado (una
-    vez al día) y el reintento de los comprobantes que quedaron a medias::
+    Con esto queda **programada** en el paquete la revisión del certificado (todos
+    los días a la hora indicada) y el reintento de los comprobantes que quedaron a
+    medias (cada diez minutos)::
 
         # settings.py
         from factec.django.conf import planificador
 
-        CELERY_BEAT_SCHEDULE = {**planificador()}
+        CELERY_BEAT_SCHEDULE = {**planificador()}                 # a las 7:00
+        CELERY_BEAT_SCHEDULE = {**planificador(a_las=6, minuto=30)}
 
-    Los intervalos se expresan en segundos (por omisión, un día y diez minutos).
+    La hora se interpreta en la zona del proyecto (``CELERY_TIMEZONE``, que conviene
+    poner igual que ``TIME_ZONE``). Si Celery no está instalado se devuelve el
+    intervalo en segundos, para que los ajustes nunca fallen al leerse.
     """
+    revisar: Dict[str, Any] = {
+        "task": nombre_tarea("revisar_certificado"),
+    }
+    try:
+        from celery.schedules import crontab
+    except ImportError:  # sin Celery: cada 24 horas desde que arranca beat
+        revisar["schedule"] = 86400.0
+    else:
+        revisar["schedule"] = crontab(minute=int(minuto), hour=int(a_las))
+
     return {
-        nombre_tarea("revisar_certificado"): {
-            "task": nombre_tarea("revisar_certificado"),
-            "schedule": cada_certificado,
-        },
+        nombre_tarea("revisar_certificado"): revisar,
         nombre_tarea("reintentar_pendientes"): {
             "task": nombre_tarea("reintentar_pendientes"),
             "schedule": cada_pendientes,

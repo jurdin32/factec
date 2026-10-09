@@ -7,6 +7,8 @@ según el esquema oficial.
 
 from __future__ import annotations
 
+import importlib.util
+import sys
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -2116,10 +2118,25 @@ def test_el_planificador_trae_las_tareas_periodicas():
     from factec.django import conf
 
     plan = conf.planificador()
+    plan_pronto = conf.planificador(a_las=6, minuto=30, cada_pendientes=120)
 
     assert set(plan) == {"sri_fe.revisar_certificado", "sri_fe.reintentar_pendientes"}
     assert plan["sri_fe.revisar_certificado"]["task"] == "sri_fe.revisar_certificado"
-    assert plan["sri_fe.revisar_certificado"]["schedule"] > 0
+
+    # La revisión de la firma va a una hora concreta (7:00 por omisión) y el
+    # reintento cada 10 minutos; sin Celery instalado, cada 24 horas.
+    if "celery" in sys.modules or importlib.util.find_spec("celery"):
+        from celery.schedules import crontab
+
+        assert plan["sri_fe.revisar_certificado"]["schedule"] == crontab(minute=0, hour=7)
+        assert plan_pronto["sri_fe.revisar_certificado"]["schedule"] == crontab(
+            minute=30, hour=6
+        )
+    else:
+        assert plan["sri_fe.revisar_certificado"]["schedule"] == 86400.0
+
+    assert plan["sri_fe.reintentar_pendientes"]["schedule"] == 600.0
+    assert plan_pronto["sri_fe.reintentar_pendientes"]["schedule"] == 120
 
 
 def test_el_admin_avisa_cuando_la_firma_impide_emitir(

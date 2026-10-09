@@ -220,15 +220,18 @@ que refechar)»** los localiza de un vistazo.
 |---|---|---|
 | Django | Sí | `python manage.py runserver` (desarrollo) o `gunicorn mi_proyecto.wsgi` (producción) |
 | Redis | Solo si usa Celery | `redis-server` (o `docker run -p 6379:6379 redis`) |
-| Celery worker | Solo si usa Celery | `celery -A mi_proyecto worker -l info` |
-| Celery beat | Opcional | `celery -A mi_proyecto beat -l info` (revisa la firma y reintenta los pendientes) |
+| Celery worker | Solo si usa Celery | `celery -A mi_proyecto worker -l info -c 4` |
+| Celery beat | Opcional | `celery -A mi_proyecto beat -l info` (revisa la firma a las 7:00 y reintenta los pendientes cada 10 min) |
 | Archivos estáticos | Al desplegar | `python manage.py collectstatic` (con `DEBUG = False`) |
 
 **¿Hace falta Celery?** No. Sin Celery, `emitir()` firma, envía y espera la
 autorización dentro de la misma llamada: más lento, pero sin nada más que
-levantar. Con Celery la emisión va a la cola y el worker la resuelve; para eso
-necesita Redis, un `celery.py` en el proyecto y el worker corriendo (está
-detallado en [docs/django.md](docs/django.md#celery)).
+levantar (y el aviso diario de la firma se pone en el cron). Con Celery la emisión
+va a la cola y el worker la resuelve; para eso necesita **Redis**, el **cliente**
+(`pip install redis`), un **`celery.py`** en el proyecto y el **worker** corriendo
+(está detallado en [docs/django.md](docs/django.md#celery)). Si falta cualquiera de
+las tres cosas, el paquete lo dice en el log y emite de forma síncrona:
+«*No hay broker de Celery configurado: se emite de forma síncrona*».
 
 El SRI es un servicio remoto: no hay nada que instalar ni levantar en su máquina.
 

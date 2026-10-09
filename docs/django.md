@@ -569,8 +569,10 @@ python manage.py revisar_firma --sin-pendientes --dias 15
 # settings.py — con Celery Beat, programada desde el propio paquete
 from factec.django.conf import planificador
 
-CELERY_BEAT_SCHEDULE = {**planificador()}     # revisa la firma a diario (86400 s)
-                                              # y reintenta los pendientes (600 s)
+CELERY_BEAT_SCHEDULE = {**planificador()}     # revisa la firma a las 7:00
+                                              # y reintenta los pendientes cada 10 min
+CELERY_TIMEZONE = TIME_ZONE                   # la hora se interpreta en esa zona
+# o elija la hora: planificador(a_las=6, minuto=30)
 
 FACTURACION_ELECTRONICA = {
     "CORREOS_AVISO": ["administracion@mitienda.ec"],   # si no, se usan los ADMINS
@@ -1025,15 +1027,21 @@ __all__ = ("celery_app",)
 from factec.django.conf import planificador
 
 CELERY_BROKER_URL = "redis://localhost:6379/0"
+CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULE = {
-    **planificador(),                                   # la firma, a diario;
-                                                        # los pendientes, cada 10 min
-    "sri-reintentar-pendientes": {                      # o a mano, con su horario
-        "task": "sri_fe.reintentar_pendientes",
+    **planificador(),                                  # la firma, a las 7:00;
+                                                       # los pendientes, cada 10 min
+    "sri-consultar-en-proceso": {                      # o a mano, con su horario
+        "task": "sri_fe.consultar_autorizacion",
         "schedule": crontab(minute="*/10"),
     },
 }
 ```
+
+> Para emitir en segundo plano hacen falta **dos cosas además de Celery**: el
+> cliente del broker (`pip install redis`, si usa Redis) y el `celery.py` de
+> arriba. Sin el cliente verá un error de `kombu` al arrancar el worker
+> (``'NoneType' object has no attribute 'Redis'``).
 
 | Tarea | Para qué |
 |---|---|
@@ -1043,8 +1051,14 @@ CELERY_BEAT_SCHEDULE = {
 | `sri_fe.revisar_certificado` | Revisa la firma electrónica y avisa antes de que falle una emisión |
 
 ```bash
-celery -A mi_proyecto worker -l info
-celery -A mi_proyecto beat -l info     # opcional, para la revisión y los reintentos
+celery -A mi_proyecto worker -l info -c 4   # -c: procesos (por omisión, uno por CPU)
+celery -A mi_proyecto beat -l info          # opcional: revisión y reintentos
+
+# Comprobar que el worker tiene las tareas del paquete:
+celery -A mi_proyecto inspect registered | grep sri_fe
+
+# Lanzar una tarea a mano (útil para ver que todo el circuito funciona):
+celery -A mi_proyecto call sri_fe.revisar_certificado
 ```
 
 Las cuatro tareas quedan registradas solas porque `factec.django` está en
