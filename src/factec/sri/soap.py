@@ -400,6 +400,7 @@ class ClienteSRI:
             clave_acceso_consultada=_texto(_hijo(respuesta, "claveAccesoConsultada")) or clave_acceso,
             numero_comprobantes=numero,
             autorizaciones=autorizaciones,
+            crudo=self.ultima_respuesta,
         )
 
     def esperar_autorizacion(

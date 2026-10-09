@@ -270,3 +270,52 @@ class TestEnviarYAutorizar:
         cliente = ClienteSRI(ambiente=Ambiente.PRUEBAS, session=sesion)
         respuesta = cliente.enviar_y_autorizar(xml, intentos=1, espera=0)
         assert respuesta.clave_acceso_consultada == CLAVE
+
+
+class TestRespuestaCruda:
+    """El cliente conserva el texto de la respuesta para guardarlo como archivo."""
+
+    def test_la_recepcion_devuelve_el_xml_tal_cual(self):
+        cuerpo = (
+            b"<soap:Envelope xmlns:soap='http://schemas.xmlsoap.org/soap/envelope/'>"
+            b"<soap:Body><RespuestaRecepcionComprobante><estado>RECIBIDA</estado>"
+            b"</RespuestaRecepcionComprobante></soap:Body></soap:Envelope>"
+        )
+        cliente = _cliente(SesionFalsa([RespuestaFalsa(cuerpo)]))
+
+        respuesta = cliente.validar_comprobante("<factura/>")
+
+        assert respuesta.recibida
+        assert respuesta.crudo == cuerpo.decode()
+        assert "Recibida".upper() in respuesta.crudo.upper()
+
+    def test_la_autorizacion_devuelve_el_xml_tal_cual(self):
+        cuerpo = (
+            b"<soap:Envelope xmlns:soap='http://schemas.xmlsoap.org/soap/envelope/'>"
+            b"<soap:Body><RespuestaAutorizacionComprobante>"
+            b"<numeroComprobantes>1</numeroComprobantes>"
+            b"<autorizaciones><autorizacion><estado>AUTORIZADO</estado>"
+            b"<numeroAutorizacion>123</numeroAutorizacion>"
+            b"<comprobante>&lt;factura/&gt;</comprobante></autorizacion></autorizaciones>"
+            b"</RespuestaAutorizacionComprobante></soap:Body></soap:Envelope>"
+        )
+        cliente = _cliente(SesionFalsa([RespuestaFalsa(cuerpo)]))
+
+        respuesta = cliente.autorizar(CLAVE)
+
+        assert respuesta.autorizada
+        assert respuesta.crudo == cuerpo.decode()
+
+    def test_sin_autorizaciones_tambien_trae_la_respuesta(self):
+        cuerpo = (
+            b"<soap:Envelope xmlns:soap='http://schemas.xmlsoap.org/soap/envelope/'>"
+            b"<soap:Body><RespuestaAutorizacionComprobante>"
+            b"<numeroComprobantes>0</numeroComprobantes>"
+            b"</RespuestaAutorizacionComprobante></soap:Body></soap:Envelope>"
+        )
+        cliente = _cliente(SesionFalsa([RespuestaFalsa(cuerpo)]))
+
+        respuesta = cliente.autorizar(CLAVE)
+
+        assert respuesta.autorizaciones == []
+        assert "RespuestaAutorizacionComprobante" in respuesta.crudo
