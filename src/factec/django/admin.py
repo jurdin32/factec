@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, List
 
 from django.contrib import admin, messages
 from django.urls import NoReverseMatch, reverse
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 
 from ..excepciones import ErrorFacturacion
-from . import conf, models, services, sri_datos
+from . import archivos, conf, models, services, sri_datos
 from .admin_documentos import *  # noqa: F401,F403  (registra los comprobantes)
 from .forms import ConfiguracionEmisorForm
 
@@ -206,7 +206,7 @@ class ComprobanteEmitidoAdmin(admin.ModelAdmin):
     list_display = (
         "numero_comprobante", "tipo_comprobante", "fecha_emision",
         "razon_social_receptor", "importe_total", "estado_badge",
-        "numero_autorizacion", "documento_origen", "creado",
+        "numero_autorizacion", "documento_origen", "archivos_enlazados", "creado",
     )
     list_select_related = ("content_type",)
     list_filter = ("estado", "tipo_comprobante", "ambiente", "fecha_emision")
@@ -226,6 +226,7 @@ class ComprobanteEmitidoAdmin(admin.ModelAdmin):
         "estado", "numero_autorizacion", "fecha_autorizacion", "mensajes",
         "intentos", "error", "creado", "actualizado",
         "xml_sin_firma", "xml_firmado", "xml_autorizado",
+        "archivos_mostrados", "carpeta", "respuesta_recepcion", "respuesta_autorizacion",
     )
     fieldsets = (
         ("Identificación", {
@@ -242,15 +243,109 @@ class ComprobanteEmitidoAdmin(admin.ModelAdmin):
             "fields": ("estado", "numero_autorizacion", "fecha_autorizacion",
                        "intentos", "error", "mensajes"),
         }),
+        ("Archivos y respuestas del SRI", {
+            "fields": ("archivos_mostrados", "carpeta"),
+            "description": "Cada comprobante deja sus XML y las respuestas del SRI "
+                           "en una carpeta por año, mes y día dentro de MEDIA_ROOT. "
+                           "Se guardan también cuando el SRI lo devuelve o falla el "
+                           "envío.",
+        }),
         ("XML", {
             "classes": ("collapse",),
             "fields": ("xml_sin_firma", "xml_firmado", "xml_autorizado"),
+        }),
+        ("Respuestas del SRI", {
+            "classes": ("collapse",),
+            "fields": ("respuesta_recepcion", "respuesta_autorizacion"),
         }),
         ("Auditoría", {
             "classes": ("collapse",),
             "fields": ("creado", "actualizado"),
         }),
     )
+
+    # ----------------------------------------------------------- archivos
+
+    def get_urls(self) -> List[Any]:
+        """Añade la descarga de cada archivo del comprobante."""
+        from django.urls import path
+
+        def envolver(vista: Any) -> Any:
+            return self.admin_site.admin_view(vista)
+
+        propias = [
+            path(
+                "<path:object_id>/archivo/<str:nombre>/",
+                envolver(self.descargar_archivo),
+                name="sri_fe_comprobanteemitido_archivo",
+            ),
+        ]
+        return propias + super().get_urls()
+
+    def descargar_archivo(self, request: Any, object_id: str, nombre: str) -> Any:
+        """Devuelve un archivo del comprobante (solo nombres conocidos)."""
+        from django.http import FileResponse, Http404
+
+        registro = self.get_object(request, object_id)
+        if registro is None:
+            raise Http404("El comprobante no existe.")
+
+        if nombre not in archivos.NOMBRES_CONOCIDOS:
+            raise Http404(f"Archivo desconocido: {nombre!r}")
+
+        ruta = archivos.ruta_de(registro, nombre)
+        if not ruta.is_file():
+            raise Http404(f"{nombre} no está guardado en disco.")
+
+        return FileResponse(ruta.open("rb"), as_attachment=True, filename=nombre)
+
+    @admin.display(description="Archivos")
+    def archivos_mostrados(self, obj: models.ComprobanteEmitido) -> str:
+        """Enlaces de descarga a los XML y a las respuestas del SRI."""
+        return self._enlaces_archivos(obj, en_lista=False)
+
+    @admin.display(description="Archivos")
+    def archivos_enlazados(self, obj: models.ComprobanteEmitido) -> str:
+        return self._enlaces_archivos(obj, en_lista=True)
+
+    def _enlaces_archivos(self, obj: models.ComprobanteEmitido, *, en_lista: bool) -> str:
+        if not obj.pk:
+            return "—"
+        encontrados = archivos.archivos_del_registro(obj)
+        if not encontrados:
+            return "—"
+        if en_lista:
+            etiquetas = {"sin_firma.xml": "XML", "firmado.xml": "F", "autorizado.xml": "A",
+                         "respuesta_recepcion.xml": "R", "respuesta_autorizacion.xml": "AR",
+                         "error.txt": "E"}
+            enlaces = [
+                format_html(
+                    '<a href="{}" title="{}">{}</a>',
+                    reverse("admin:sri_fe_comprobanteemitido_archivo",
+                            args=[obj.pk, archivo["nombre"]]),
+                    archivo["nombre"],
+                    etiquetas.get(archivo["nombre"], archivo["nombre"]),
+                )
+                for archivo in encontrados
+            ]
+            return format_html(" ".join(["{}"] * len(enlaces)), *enlaces)
+
+        return format_html(
+            "<ul style='margin:0;padding-left:1.2em'>{}</ul>",
+            format_html_join(
+                "",
+                "<li><a href='{}'>{}</a> <span style='color:#666'>({})</span></li>",
+                (
+                    (
+                        reverse("admin:sri_fe_comprobanteemitido_archivo",
+                                args=[obj.pk, archivo["nombre"]]),
+                        archivo["nombre"],
+                        archivo["relativa"],
+                    )
+                    for archivo in encontrados
+                ),
+            ),
+        )
 
     @admin.display(description="Comprobante", ordering="secuencial")
     def numero_comprobante(self, obj: models.ComprobanteEmitido) -> str:

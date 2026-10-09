@@ -44,7 +44,7 @@ from ..sri.soap import (
     RespuestaAutorizacion,
     RespuestaRecepcion,
 )
-from . import conf, models
+from . import archivos, conf, models
 
 __all__ = [
     "crear_factura",
@@ -144,6 +144,29 @@ def _metricas(comprobante: Comprobante) -> Dict[str, Any]:
 # --------------------------------------------------------------- registro
 
 
+def _guardar_archivos(registro: models.ComprobanteEmitido, **piezas: Optional[str]) -> None:
+    """Deja los XML y las respuestas del SRI en la carpeta del comprobante.
+
+    Se guarda todo, también cuando el SRI devuelve el comprobante o falla el
+    envío: es la evidencia de lo que se envió y de lo que respondió.
+    """
+    if not conf.obtener("GUARDAR_ARCHIVOS", True):
+        return
+
+    escritos = [
+        archivos.escribir(registro, nombre, contenido)
+        for nombre, contenido in piezas.items()
+        if contenido
+    ]
+    if not escritos:
+        return
+
+    carpeta = archivos.carpeta_de(registro)
+    if registro.carpeta != carpeta:
+        registro.carpeta = carpeta
+        registro.save(update_fields=["carpeta", "actualizado"])
+
+
 def registrar(
     comprobante: Comprobante,
     *,
@@ -183,6 +206,7 @@ def registrar(
         "%s comprobante %s (%s)", "Creado" if creado else "Actualizado",
         registro.clave_acceso, registro.estado,
     )
+    _guardar_archivos(registro, **{archivos.NOMBRE_SIN_FIRMA: xml})
     return registro
 
 
@@ -368,11 +392,22 @@ def firmar(
     registro.estado = models.EstadoComprobante.FIRMADO
     registro.error = ""
     registro.save(update_fields=["xml_firmado", "estado", "error", "actualizado"])
+    _guardar_archivos(registro, **{archivos.NOMBRE_FIRMADO: xml_firmado})
     return registro
 
 
-def enviar(registro: models.ComprobanteEmitido) -> RespuestaRecepcion:
-    """Envía el comprobante a recepción y actualiza el estado."""
+def enviar(
+    registro: models.ComprobanteEmitido,
+    *,
+    guardar_respuesta: Optional[bool] = None,
+) -> RespuestaRecepcion:
+    """Envía el comprobante a recepción y actualiza el estado.
+
+    La respuesta del SRI se guarda en el registro y en un archivo, para poder
+    demostrar qué contestó (también cuando devuelve el comprobante).
+    """
+    if guardar_respuesta is None:
+        guardar_respuesta = bool(conf.obtener("GUARDAR_XML", True))
     xml = registro.xml_firmado or registro.xml_sin_firma
     if not xml:
         raise ErrorFacturacion("No hay XML firmado para enviar.")
@@ -387,6 +422,7 @@ def enviar(registro: models.ComprobanteEmitido) -> RespuestaRecepcion:
         registro.save(
             update_fields=["intentos", "estado", "error", "mensajes", "actualizado"]
         )
+        _guardar_archivos(registro, **{archivos.NOMBRE_ERROR: f"{type(exc).__name__}: {exc}"})
         raise
 
     mensajes = mensajes_a_dict(recepcion.mensajes)
@@ -399,7 +435,18 @@ def enviar(registro: models.ComprobanteEmitido) -> RespuestaRecepcion:
             str(m.get("mensaje", "")) for m in mensajes
         ) or "El SRI devolvió el comprobante."
     registro.mensajes = mensajes
-    registro.save(update_fields=["intentos", "estado", "error", "mensajes", "actualizado"])
+    if guardar_respuesta:
+        registro.respuesta_recepcion = recepcion.crudo
+    registro.save(
+        update_fields=[
+            "intentos", "estado", "error", "mensajes",
+            "respuesta_recepcion", "actualizado",
+        ]
+    )
+    piezas = {archivos.NOMBRE_RESPUESTA_RECEPCION: recepcion.crudo}
+    if not recepcion.recibida:
+        piezas[archivos.NOMBRE_ERROR] = registro.error
+    _guardar_archivos(registro, **piezas)
     return recepcion
 
 
@@ -408,8 +455,11 @@ def autorizar(
     *,
     intentos: Optional[int] = None,
     espera: Optional[float] = None,
+    guardar_respuesta: Optional[bool] = None,
 ) -> RespuestaAutorizacion:
     """Consulta la autorización y actualiza el estado del registro."""
+    if guardar_respuesta is None:
+        guardar_respuesta = bool(conf.obtener("GUARDAR_XML", True))
     intentos = int(intentos if intentos is not None else conf.obtener("REINTENTOS_AUTORIZACION"))
     espera = float(espera if espera is not None else conf.obtener("ESPERA_AUTORIZACION"))
 
@@ -424,6 +474,11 @@ def autorizar(
         return respuesta
 
     mensajes = mensajes_a_dict(ultima.mensajes)
+    if guardar_respuesta:
+        registro.respuesta_autorizacion = respuesta.crudo
+        registro.save(update_fields=["respuesta_autorizacion", "actualizado"])
+        _guardar_archivos(registro, **{archivos.NOMBRE_RESPUESTA_AUTORIZACION: respuesta.crudo})
+
     if ultima.estado.upper() == ESTADO_AUTORIZADO:
         registro.marcar_autorizado(
             numero_autorizacion=ultima.numero_autorizacion or registro.clave_acceso,
@@ -431,6 +486,7 @@ def autorizar(
             xml_autorizado=ultima.comprobante or "",
             mensajes=mensajes,
         )
+        _guardar_archivos(registro, **{archivos.NOMBRE_AUTORIZADO: ultima.comprobante or ""})
     elif ultima.estado.upper() == ESTADO_EN_PROCESO:
         registro.estado = models.EstadoComprobante.EN_PROCESO
         registro.mensajes = mensajes

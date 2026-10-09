@@ -423,6 +423,18 @@ class ComprobanteEmitido(models.Model):
     xml_sin_firma = models.TextField("XML sin firmar", blank=True)
     xml_firmado = models.TextField("XML firmado", blank=True)
     xml_autorizado = models.TextField("XML autorizado", blank=True)
+    respuesta_recepcion = models.TextField(
+        "respuesta de recepción del SRI", blank=True,
+        help_text="Respuesta SOAP tal cual llegó (se guarda aunque el comprobante esté mal).",
+    )
+    respuesta_autorizacion = models.TextField(
+        "respuesta de autorización del SRI", blank=True,
+        help_text="Respuesta SOAP tal cual llegó, con el comprobante autorizado.",
+    )
+    carpeta = models.CharField(
+        "carpeta de archivos", max_length=255, blank=True,
+        help_text="Carpeta, dentro de MEDIA_ROOT, con los XML y las respuestas del SRI.",
+    )
 
     creado = models.DateTimeField("creado", auto_now_add=True)
     actualizado = models.DateTimeField("actualizado", auto_now=True)

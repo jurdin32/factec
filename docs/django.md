@@ -425,6 +425,56 @@ completarlo:
 Son avisos para no impedir el arranque: primero se levanta el servidor y se
 rellena la configuración en el admin.
 
+### Archivos del comprobante
+
+Además de los XML en la base de datos (`GUARDAR_XML`), cada comprobante deja sus
+archivos en disco (`GUARDAR_ARCHIVOS`, activado por omisión) dentro de
+`MEDIA_ROOT`, ordenados por año, mes y día::
+
+    media/sri/comprobantes/2026/10/08/001-001-000000012_<clave de acceso>/
+        sin_firma.xml                # el XML tal como se construyó
+        firmado.xml                  # con la firma XAdES-BES
+        autorizado.xml               # el que devuelve el SRI al autorizar
+        respuesta_recepcion.xml      # respuesta SOAP de recepción, sin retocar
+        respuesta_autorizacion.xml   # respuesta SOAP de autorización
+        error.txt                    # último error, si lo hubo
+
+Se escribe en cada paso, así que **también queda lo que salió mal** (devuelto,
+no autorizado o error de red): es la evidencia de lo enviado y de lo respondido.
+Las respuestas crudas se guardan además en los campos `respuesta_recepcion` y
+`respuesta_autorizacion` del comprobante.
+
+| Ajuste | Para qué |
+|---|---|
+| `GUARDAR_XML` | Guardar los XML en la base de datos (por omisión `True`) |
+| `GUARDAR_ARCHIVOS` | Guardar los XML y las respuestas como archivos (por omisión `True`) |
+
+En el admin, cada comprobante tiene la sección **Archivos y respuestas del SRI**
+con la carpeta y un enlace de descarga por archivo. La descarga pasa por el admin
+(hace falta ser del *staff*), así que **no hay que publicar `MEDIA_URL`** ni
+`collectstatic` para verlos; aun así el archivo está en `MEDIA_ROOT` para
+copiarlo con un `rsync`, subirlo a S3 o hacer copias de seguridad.
+
+```python
+from factec.django import archivos
+
+archivos.carpeta_de(registro)          # "sri/comprobantes/2026/10/08/001-001-…_<clave>"
+archivos.ruta_de(registro, "firmado.xml")
+archivos.archivos_del_registro(registro)   # [{nombre, ruta, relativa, bytes}]
+```
+
+#### Comprobantes anteriores
+
+Si los comprobantes se emitieron antes de activar los archivos, o si se perdió la
+carpeta, se rehacen desde lo guardado en la base de datos:
+
+```bash
+python manage.py archivar_comprobantes                        # todos
+python manage.py archivar_comprobantes --desde 2026-10-01     # desde una fecha
+python manage.py archivar_comprobantes --estado DEVUELTO      # solo los devueltos
+python manage.py archivar_comprobantes --simular              # ver sin escribir
+```
+
 ### Emitir desde el código
 
 Los servicios leen la configuración de la base de datos:

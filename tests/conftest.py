@@ -398,6 +398,20 @@ def configuracion(limpiar_tablas, clave_cifrado, certificado_p12):
     return instancia
 
 
+#: Respuestas «crudas» que devolvería el SRI (se guardan como archivos).
+CRUDO_RECEPCION = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    "<soap:Envelope><RespuestaRecepcionComprobante>"
+    "<estado>RECIBIDA</estado></RespuestaRecepcionComprobante></soap:Envelope>"
+)
+CRUDO_AUTORIZACION = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    "<soap:Envelope><RespuestaAutorizacionComprobante>"
+    "<numeroComprobantes>1</numeroComprobantes></RespuestaAutorizacionComprobante>"
+    "</soap:Envelope>"
+)
+
+
 class ClienteFalso:
     """Cliente SOAP falso para no tocar la red."""
 
@@ -413,13 +427,16 @@ class ClienteFalso:
 
         self.llamadas.append("recepcion")
         if self.estado_recepcion == "RECIBIDA":
-            return RespuestaRecepcion(estado="RECIBIDA", clave_acceso=RUC, mensajes=[])
+            return RespuestaRecepcion(
+                estado="RECIBIDA", clave_acceso=RUC, mensajes=[], crudo=CRUDO_RECEPCION
+            )
         return RespuestaRecepcion(
             estado="DEVUELTA",
             clave_acceso="N/A",
             mensajes=[
                 Mensaje(identificador="35", mensaje="ARCHIVO NO CUMPLE ESTRUCTURA XML")
             ],
+            crudo=CRUDO_RECEPCION,
         )
 
     def esperar_autorizacion(self, clave: str, intentos: int = 5, espera: float = 3.0):
@@ -437,7 +454,8 @@ class ClienteFalso:
         else:
             autorizacion = Autorizacion(estado=self.estado_autorizacion)
         return RespuestaAutorizacion(
-            clave_acceso_consultada=clave, numero_comprobantes=1, autorizaciones=[autorizacion]
+            clave_acceso_consultada=clave, numero_comprobantes=1,
+            autorizaciones=[autorizacion], crudo=CRUDO_AUTORIZACION,
         )
 
 

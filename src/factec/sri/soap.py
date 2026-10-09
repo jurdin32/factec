@@ -90,6 +90,8 @@ class RespuestaRecepcion:
     estado: str = ""
     clave_acceso: str = ""
     mensajes: List[Mensaje] = field(default_factory=list)
+    #: Respuesta tal cual la devolvió el SRI (para conservarla como evidencia).
+    crudo: str = ""
 
     @property
     def recibida(self) -> bool:
@@ -180,6 +182,8 @@ class RespuestaAutorizacion:
     clave_acceso_consultada: str = ""
     numero_comprobantes: int = 0
     autorizaciones: List[Autorizacion] = field(default_factory=list)
+    #: Respuesta tal cual la devolvió el SRI (para conservarla como evidencia).
+    crudo: str = ""
 
     @property
     def ultima(self) -> Optional[Autorizacion]:
@@ -304,6 +308,8 @@ class ClienteSRI:
         self.session = session or requests.Session()
         self.session.headers.setdefault("User-Agent", _USER_AGENT)
         self.session.headers.setdefault("Content-Type", "text/xml; charset=utf-8")
+        #: Texto de la última respuesta del SRI, tal cual llegó.
+        self.ultima_respuesta = ""
 
     # ------------------------------------------------------------- transporte
 
@@ -331,6 +337,8 @@ class ClienteSRI:
                 f"{respuesta.content[:200]!r}"
             ) from exc
 
+        self.ultima_respuesta = respuesta.content.decode("utf-8", "replace")
+
         fallo = raiz.find(f".//{{{SOAP_ENV}}}Fault")
         if fallo is not None:
             raise ErrorSRI(
@@ -356,6 +364,7 @@ class ClienteSRI:
             estado=estado,
             clave_acceso=_texto(_hijo(comprobante, "claveAcceso")),
             mensajes=_mensajes(_hijo(comprobante, "mensajes")),
+            crudo=self.ultima_respuesta,
         )
 
     def autorizar(self, clave_acceso: str) -> RespuestaAutorizacion:
@@ -366,7 +375,9 @@ class ClienteSRI:
         )
         respuesta = _hijo(raiz, "RespuestaAutorizacionComprobante")
         if respuesta is None:
-            return RespuestaAutorizacion(clave_acceso_consultada=clave_acceso)
+            return RespuestaAutorizacion(
+                clave_acceso_consultada=clave_acceso, crudo=self.ultima_respuesta
+            )
 
         autorizaciones = []
         for nodo in respuesta.iter("autorizacion"):

@@ -49,6 +49,8 @@ AJUSTES_POR_DEFECTO: Dict[str, Any] = {
     "REINTENTOS_AUTORIZACION": 6,
     "ESPERA_AUTORIZACION": 4.0,
     "GUARDAR_XML": True,
+    #: Guardar los XML y las respuestas del SRI como archivos en MEDIA_ROOT.
+    "GUARDAR_ARCHIVOS": True,
     "CELERY_QUEUE": None,
     "CELERY_PREFIX": "sri_fe",
     "TIMEOUT": 30.0,

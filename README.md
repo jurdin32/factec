@@ -75,6 +75,7 @@ FACTURACION_ELECTRONICA = {
     "CLAVE_CIFRADO": "ponga-aquí-su-clave",
     "AMBIENTE": 1,            # 1 = pruebas, 2 = producción (respaldo del admin)
     "GUARDAR_XML": True,      # guarda los XML en la base de datos
+    "GUARDAR_ARCHIVOS": True,  # además, los XML y las respuestas como archivos
 }
 
 # El SRI está en Ecuador y compara la fecha de emisión con la suya. Si deja el
@@ -116,6 +117,24 @@ Admin: <http://127.0.0.1:8000/admin/> → **Facturación electrónica (SRI)**
 3. **Comprobantes** → cree una **factura**, añada líneas *eligiendo el producto*
    (la descripción, el precio y el IVA se completan solos) y pulse
    **«Emitir: firmar, enviar al SRI y esperar autorización»**.
+
+Cada comprobante deja sus **XML y las respuestas del SRI** en una carpeta por año,
+mes y día dentro de `MEDIA_ROOT`, y se descargan desde el propio admin
+(**Emisión → Comprobantes emitidos → Archivos y respuestas del SRI**):
+
+```
+media/sri/comprobantes/2026/10/08/001-001-000000012_<clave>/
+├── sin_firma.xml
+├── firmado.xml
+├── autorizado.xml
+├── respuesta_recepcion.xml
+├── respuesta_autorizacion.xml
+└── error.txt                    # si el SRI lo devolvió o falló el envío
+```
+
+Se guarda **todo, también lo rechazado**: es la evidencia de lo que se envió y de
+lo que contestó el SRI. Para los comprobantes emitidos antes de activar esta
+opción, o si se perdió la carpeta, existe `python manage.py archivar_comprobantes`.
 
 ### Si el SRI devuelve «FECHA EMISIÓN EXTEMPORANEA» (mensaje 65)
 
@@ -164,6 +183,9 @@ python manage.py importar_ruc_sri --ruc 0703886697001 --dir-matriz "PANAMERICANA
 # sin consultar al SRI y sin preguntar (para instalaciones desatendidas)
 python manage.py importar_ruc_sri --ruc 0703886697001 --sin-consultar \
     --dir-matriz "PANAMERICANA Y CARCHI" --sin-confirmar
+
+python manage.py archivar_comprobantes            # reescribe los archivos de los ya emitidos
+python manage.py archivar_comprobantes --desde 2026-10-01 --estado DEVUELTO --simular
 
 sri-fe --help                # línea de comandos del núcleo: clave, firmar, enviar…
 ```
@@ -215,7 +237,7 @@ resultado = emisor.emitir(factura)
 | [docs/django.md](docs/django.md) | La app de Django: modelos, admin, adaptadores, Celery y ajustes |
 | [docs/prueba-real.md](docs/prueba-real.md) | Emitir de verdad contra el ambiente de pruebas del SRI |
 | [examples/](examples/) | Scripts listos para ejecutar |
-| [tests/](tests/) | 368 pruebas, incluida la validación contra los XSD oficiales |
+| [tests/](tests/) | 375 pruebas, incluida la validación contra los XSD oficiales |
 
 ---
 

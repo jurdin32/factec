@@ -1234,3 +1234,189 @@ def test_reintentar_tambien_rehace_un_devuelto(documentos, factura, cliente_fals
     assert segundo.autorizado
     assert segundo.pk != primero.pk
     assert "Corregido tras la devolución" in segundo.xml_sin_firma
+
+
+# ------------------------------------ archivos: XML y respuestas del SRI
+
+
+def test_la_emision_guarda_los_xml_y_las_respuestas(documentos, factura, cliente_falso):
+    """Todo queda en disco por año, mes y día, dentro de MEDIA_ROOT."""
+    from pathlib import Path
+
+    from django.conf import settings
+
+    from factec.django import archivos, models
+
+    registro = factura.emitir(encolar=False)
+
+    # La carpeta es año/mes/día + serie y clave de acceso.
+    assert registro.carpeta.startswith(
+        f"sri/comprobantes/{registro.fecha_emision:%Y/%m/%d}/"
+    )
+    assert registro.carpeta.endswith(registro.clave_acceso)
+    assert registro.secuencial in registro.carpeta
+
+    carpeta = Path(settings.MEDIA_ROOT) / registro.carpeta
+    for nombre in (
+        archivos.NOMBRE_SIN_FIRMA,
+        archivos.NOMBRE_FIRMADO,
+        archivos.NOMBRE_AUTORIZADO,
+        archivos.NOMBRE_RESPUESTA_RECEPCION,
+        archivos.NOMBRE_RESPUESTA_AUTORIZACION,
+    ):
+        assert (carpeta / nombre).is_file(), f"falta {nombre}"
+
+    # El contenido es el del comprobante (y es XML válido del SRI).
+    sin_firma = (carpeta / archivos.NOMBRE_SIN_FIRMA).read_text(encoding="utf-8")
+    assert sin_firma == registro.xml_sin_firma
+    assert f"<fechaEmision>{registro.fecha_emision:%d/%m/%Y}</fechaEmision>" in sin_firma
+    assert (carpeta / archivos.NOMBRE_AUTORIZADO).read_text(encoding="utf-8") == (
+        registro.xml_autorizado
+    )
+
+    # Las respuestas del SRI quedan en el registro y en su archivo.
+    assert registro.estado == models.EstadoComprobante.AUTORIZADO
+    assert "RECIBIDA" in registro.respuesta_recepcion
+    assert "RespuestaAutorizacionComprobante" in registro.respuesta_autorizacion
+    assert (carpeta / archivos.NOMBRE_RESPUESTA_RECEPCION).read_text(encoding="utf-8") == (
+        registro.respuesta_recepcion
+    )
+
+
+def test_un_comprobante_devuelto_tambien_deja_sus_archivos(documentos, factura, cliente_falso):
+    """Aunque el SRI lo devuelva, queda la evidencia completa en la carpeta."""
+    from pathlib import Path
+
+    from django.conf import settings
+
+    from factec.django import archivos, models
+
+    cliente_falso.estado_recepcion = "DEVUELTA"
+    registro = factura.emitir(encolar=False)
+
+    assert registro.estado == models.EstadoComprobante.DEVUELTO
+    carpeta = Path(settings.MEDIA_ROOT) / registro.carpeta
+
+    assert (carpeta / archivos.NOMBRE_SIN_FIRMA).is_file()
+    assert (carpeta / archivos.NOMBRE_FIRMADO).is_file()
+    assert (carpeta / archivos.NOMBRE_RESPUESTA_RECEPCION).is_file()
+    assert (carpeta / archivos.NOMBRE_ERROR).is_file()
+    assert not (carpeta / archivos.NOMBRE_AUTORIZADO).exists()
+
+    assert "ARCHIVO NO CUMPLE ESTRUCTURA XML" in (
+        carpeta / archivos.NOMBRE_ERROR
+    ).read_text(encoding="utf-8")
+
+
+def test_se_puede_desactivar_el_guardado_de_archivos(documentos, factura, cliente_falso,
+                                                    monkeypatch):
+    from pathlib import Path
+
+    from django.conf import settings
+
+    from factec.django import archivos, conf
+
+    original = conf.obtener
+    monkeypatch.setattr(
+        conf,
+        "obtener",
+        lambda nombre, por_defecto=None: (
+            False if nombre == "GUARDAR_ARCHIVOS" else original(nombre, por_defecto)
+        ),
+    )
+
+    registro = factura.emitir(encolar=False)
+
+    assert registro.carpeta == ""
+    assert not (Path(settings.MEDIA_ROOT) / archivos.carpeta_de(registro)).exists()
+    # El XML sigue en la base de datos.
+    assert registro.xml_firmado
+
+
+def test_el_admin_enlaza_y_sirve_los_archivos(admin_cliente, factura, cliente_falso):
+    from django.conf import settings
+
+    registro = factura.emitir(encolar=False)
+    url_cambio = f"/admin/sri_fe/comprobanteemitido/{registro.pk}/change/"
+
+    respuesta = admin_cliente.get(url_cambio)
+    assert respuesta.status_code == 200
+    cuerpo = respuesta.content.decode()
+    assert "Archivos y respuestas del SRI" in cuerpo
+    assert registro.carpeta in cuerpo
+    assert "sin_firma.xml" in cuerpo and "respuesta_autorizacion.xml" in cuerpo
+
+    # La descarga del admin devuelve el archivo…
+    descarga = admin_cliente.get(
+        f"/admin/sri_fe/comprobanteemitido/{registro.pk}/archivo/firmado.xml/"
+    )
+    assert descarga.status_code == 200
+    assert b"<factura" in b"".join(descarga.streaming_content)
+
+    # …y solo los nombres conocidos.
+    assert admin_cliente.get(
+        f"/admin/sri_fe/comprobanteemitido/{registro.pk}/archivo/secreto.txt/"
+    ).status_code == 404
+
+    assert settings.MEDIA_ROOT  # el proyecto tiene que definir MEDIA_ROOT
+
+
+def test_el_comando_archiva_los_comprobantes_anteriores(documentos, factura, cliente_falso):
+    """Los comprobantes ya emitidos recuperan sus carpetas desde la base de datos."""
+    from pathlib import Path
+
+    from django.conf import settings
+    from django.core.management import call_command
+
+    from factec.django import archivos
+
+    registro = factura.emitir(encolar=False)
+
+    # Se simula que los archivos se perdieron (o que se emitió con la versión
+    # anterior, que no los guardaba).
+    carpeta = Path(settings.MEDIA_ROOT) / registro.carpeta
+    for archivo in carpeta.iterdir():
+        archivo.unlink()
+    carpeta.rmdir()
+    registro.carpeta = ""
+    registro.save(update_fields=["carpeta"])
+
+    call_command("archivar_comprobantes", verbosity=0)
+
+    registro.refresh_from_db()
+    assert registro.carpeta.startswith(f"sri/comprobantes/{registro.fecha_emision:%Y/%m/%d}/")
+    assert (Path(settings.MEDIA_ROOT) / registro.carpeta / archivos.NOMBRE_FIRMADO).is_file()
+
+
+def test_el_comando_archiva_solo_lo_que_se_pide(documentos, factura, cliente_falso, capsys):
+    from django.core.management import call_command
+
+    factura.emitir(encolar=False)
+
+    call_command("archivar_comprobantes", "--simular", verbosity=0)
+    salida = capsys.readouterr().out
+
+    assert "Se escribirían 1 comprobante" in salida
+
+
+def test_el_comando_archiva_aunque_el_comprobante_este_mal(documentos, factura, cliente_falso,
+                                                           tmp_path):
+    from pathlib import Path
+
+    from django.conf import settings
+    from django.core.management import call_command
+
+    from factec.django import archivos
+
+    cliente_falso.estado_recepcion = "DEVUELTA"
+    devuelto = factura.emitir(encolar=False)
+
+    # Se borra la carpeta y se rehace desde la base de datos.
+    carpeta = Path(settings.MEDIA_ROOT) / devuelto.carpeta
+    for archivo in carpeta.iterdir():
+        archivo.unlink()
+    call_command("archivar_comprobantes", "--estado", "DEVUELTO", verbosity=0)
+
+    assert (carpeta / archivos.NOMBRE_ERROR).is_file()
+    assert (carpeta / archivos.NOMBRE_RESPUESTA_RECEPCION).is_file()
+    assert not (carpeta / archivos.NOMBRE_AUTORIZADO).exists()
