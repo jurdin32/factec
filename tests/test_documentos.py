@@ -767,7 +767,9 @@ def test_el_indice_agrupa_por_temas(admin_cliente):
     ]
 
     # Las cuatro, en este orden. Las demás apps del proyecto no se tocan.
-    assert propias == ["Configuración del SRI", "Catálogos", "Comprobantes", "Emisión"]
+    assert propias == ["Configuración del SRI", "Catálogos", "Comprobantes", "Emisión"], (
+        f"secciones encontradas: {_secciones(html)}"
+    )
 
 
 def test_cada_seccion_lleva_sus_modelos(admin_cliente):
@@ -827,8 +829,8 @@ def test_la_portada_de_la_app_tambien_agrupa(admin_cliente):
     """La portada /admin/sri_fe/ usa las mismas secciones."""
     html = _pagina_del_admin(admin_cliente, "/admin/sri_fe/")
 
-    assert "Configuración del SRI" in _secciones(html)
-    assert "Comprobantes" in _secciones(html)
+    assert "Configuración del SRI" in _secciones(html), f"secciones: {_secciones(html)}"
+    assert "Comprobantes" in _secciones(html), f"secciones: {_secciones(html)}"
 
 
 def test_las_facturas_se_filtran_por_estado(admin_cliente, factura):
