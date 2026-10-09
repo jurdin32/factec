@@ -506,6 +506,26 @@ def emitir_ahora(
 # ------------------------------------------------------------------ Celery
 
 
+def _app_celery() -> Optional[Any]:
+    """Devuelve la aplicación de Celery actual, o ``None`` si no está disponible.
+
+    Celery es **opcional**: si no está instalado o no hay broker configurado, se
+    devuelve ``None`` para que quien llame emita de forma síncrona.
+    """
+    try:
+        from celery import current_app
+    except ImportError:
+        logger.info("Celery no está instalado: se emite de forma síncrona.")
+        return None
+
+    if current_app.conf.broker_url is None and not getattr(
+        current_app.conf, "task_always_eager", False
+    ):
+        logger.warning("No hay broker de Celery configurado: se emite de forma síncrona.")
+        return None
+    return current_app
+
+
 def encolar(registro: models.ComprobanteEmitido, *, usar_cola: bool = True) -> Optional[str]:
     """Envía el registro a la tarea de Celery y devuelve el id de la tarea.
 
@@ -516,20 +536,15 @@ def encolar(registro: models.ComprobanteEmitido, *, usar_cola: bool = True) -> O
     Devuelve ``None`` si no hay ningún broker de Celery configurado: en ese caso
     conviene llamar a :func:`procesar` de forma síncrona.
     """
-    from celery import current_app
-
-    if current_app.conf.broker_url is None and not getattr(current_app.conf, "task_always_eager", False):
-        logger.warning(
-            "No hay broker de Celery configurado: no se encoló el comprobante %s.",
-            registro.clave_acceso,
-        )
+    actual = _app_celery()
+    if actual is None:
         return None
 
     opciones: Dict[str, Any] = {}
     if usar_cola and conf.celery_queue():
         opciones["queue"] = conf.celery_queue()
 
-    resultado = current_app.send_task(
+    resultado = actual.send_task(
         conf.nombre_tarea("emitir_comprobante"),
         args=[registro.pk],
         **opciones,
@@ -540,13 +555,15 @@ def encolar(registro: models.ComprobanteEmitido, *, usar_cola: bool = True) -> O
 
 def encolar_autorizacion(registro: models.ComprobanteEmitido, *, usar_cola: bool = True) -> Optional[str]:
     """Encola solo la consulta de autorización (para los ``EN_PROCESO``)."""
-    from celery import current_app
+    actual = _app_celery()
+    if actual is None:
+        return None
 
     opciones: Dict[str, Any] = {}
     if usar_cola and conf.celery_queue():
         opciones["queue"] = conf.celery_queue()
 
-    resultado = current_app.send_task(
+    resultado = actual.send_task(
         conf.nombre_tarea("consultar_autorizacion"),
         args=[registro.pk],
         **opciones,

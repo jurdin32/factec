@@ -1,0 +1,368 @@
+# Uso sin Django
+
+El núcleo del paquete: clave de acceso, XML de los seis comprobantes, firma XAdES-BES, envío al SRI, catálogos, línea de comandos y referencia de la API.
+
+> Documentación de [**factec**](../README.md) · volver al README
+
+---
+
+## Inicio rápido
+
+```python
+from datetime import date
+from decimal import Decimal
+
+from factec import (
+    Detalle, Emisor, EmisorElectronico, Impuesto, Receptor,
+)
+from factec.catalogos import TarifaIva, TipoIdentificacion
+
+# 1. Configure el emisor y su certificado
+emisor = EmisorElectronico(
+    emisor=Emisor(
+        ruc="1790012345001",
+        razon_social="ACME S.A.",
+        nombre_comercial="ACME",
+        dir_matriz="Av. Amazonas 123, Quito",
+        dir_establecimiento="Av. Amazonas 123, Quito",
+    ),
+    certificado="firmante.p12",
+    clave_certificado="mi-clave",
+    ambiente=1,          # 1 = pruebas, 2 = producción
+)
+
+# 2. Arme la factura
+factura = emisor.factura(
+    receptor=Receptor(
+        identificacion="0703886697001",
+        razon_social="CLIENTE EJEMPLO",
+        tipo_identificacion=TipoIdentificacion.RUC,
+        direccion="Guayaquil",
+    ),
+    detalles=[
+        Detalle(
+            descripcion="Servicio de desarrollo",
+            cantidad=Decimal("2"),
+            precio_unitario=Decimal("100.00"),
+            impuestos=[Impuesto(codigo_porcentaje=TarifaIva.IVA_15)],
+        )
+    ],
+    fecha_emision=date(2026, 10, 8),
+)
+
+# 3. Clave de acceso y XML
+print(factura.clave)             # 0810202601179001234500110010010000000011234567819
+print(factura.to_xml())          # XML sin firmar
+print(factura.to_xml(pretty=True))
+
+# 4. Firmar y enviar
+resultado = emisor.emitir(factura)   # firma + recepción + autorización
+print(resultado.autorizada, resultado.numero_autorizacion)
+print(resultado.xml_autorizado)      # el comprobante tal como lo devuelve el SRI
+```
+
+Para una liquidación de compra, nota de crédito, nota de débito, retención o
+guía de remisión, la fachada expone `emisor.liquidacion_compra(...)`,
+`emisor.nota_credito(...)`, `emisor.nota_debito(...)`, `emisor.retencion(...)` y
+`emisor.guia_remision(...)`.
+
+---
+
+## Clave de acceso
+
+```python
+from datetime import date
+from factec import (
+    generar_clave_acceso, validar_clave_acceso, descomponer_clave_acceso,
+)
+
+clave = generar_clave_acceso(
+    fecha_emision=date(2026, 10, 8),
+    tipo_comprobante="01",      # tabla 1 del SRI
+    ruc="1790012345001",
+    ambiente=1,
+    serie="001001",             # establecimiento (3) + punto de emisión (3)
+    secuencial="1",
+    codigo_numerico="12345678", # 8 dígitos elegidos por el emisor
+)
+assert validar_clave_acceso(clave)
+descomponer_clave_acceso(clave)
+```
+
+La clave tiene **49 dígitos**: fecha (8) + tipo (2) + RUC (13) + ambiente (1) +
+serie (6) + secuencial (9) + código numérico (8) + tipo de emisión (1) +
+verificador módulo 11 (1). Las funciones aceptan fechas como `date` o texto
+(`dd/mm/aaaa`, `dd-mm-aaaa`, `aaaa-mm-dd`).
+
+Cada comprobante genera su clave automáticamente la primera vez que se pide
+(`comprobante.clave`), usando un código numérico aleatorio si no se indica otro.
+
+---
+
+## Firma electrónica (XAdES-BES)
+
+```python
+from factec import Certificado, firmar_xml, verificar_firma
+
+certificado = Certificado.desde_archivo("firmante.p12", "mi-clave")
+certificado.validar_vigencia()
+
+xml_firmado = firmar_xml(factura.to_xml(), certificado)          # SHA-1, el clásico del SRI
+xml_firmado = firmar_xml(factura.to_xml(), certificado, algoritmo="sha256")
+
+verificar_firma(xml_firmado, certificado)   # {'valido': True, 'firmas': [...]}
+```
+
+O directamente desde el comprobante:
+
+```python
+xml_firmado = factura.firmar(certificado)
+```
+
+Qué produce la firma:
+
+- firma *enveloped* sobre el elemento raíz (`id="comprobante"`);
+- canonicalización inclusiva `xml-c14n`;
+- dos referencias: el comprobante y `SignedProperties` (con el `Type` de ETSI);
+- `KeyInfo` con el certificado X.509 y la clave pública RSA;
+- `SignedProperties` con `SigningTime`, `CertDigest` e `IssuerSerial`;
+- los elementos `ds:Signature` en el orden que exige XMLDSig:
+  `SignedInfo`, `SignatureValue`, `KeyInfo`, `Object`.
+
+**Algoritmos disponibles:** `sha1` (por omisión), `sha256` y `sha512`.
+El SRI valida de forma más amplia SHA-1, por eso es el valor por omisión.
+
+⚠️ Firme **después** de tener el XML definitivo: la firma cubre el contenido, así
+que cualquier cambio posterior la invalida.
+
+---
+
+## Envío al SRI
+
+| Ambiente | Valor | Host |
+|---|---|---|
+| Pruebas | `1` | `celcer.sri.gob.ec` |
+| Producción | `2` | `cel.sri.gob.ec` |
+
+### Flujo de una sola llamada
+
+```python
+resultado = emisor.emitir(factura)     # firma + validarComprobante + autorizacionComprobante
+if resultado.autorizada:
+    print(resultado.numero_autorizacion)
+```
+
+### Flujo por pasos
+
+```python
+xml = emisor.firmar(factura)
+
+recepcion = emisor.cliente.validar_comprobante(xml)
+recepcion.lanzar_si_devuelta()          # lanza ErrorRecepcion si el SRI la devuelve
+print(recepcion.estado)                 # RECIBIDA / DEVUELTA
+
+autorizacion = emisor.cliente.esperar_autorizacion(recepcion.clave_acceso, intentos=5, espera=3)
+autorizacion.lanzar_si_no_autorizada()  # lanza ErrorAutorizacion si no se autoriza
+print(autorizacion.ultima.estado)       # AUTORIZADO / NO AUTORIZADO / EN PROCESO
+
+print(autorizacion.ultima.comprobante)  # XML autorizado que devuelve el SRI
+```
+
+### Estados
+
+| Servicio | Estados posibles |
+|---|---|
+| `validarComprobante` | `RECIBIDA`, `DEVUELTA` |
+| `autorizacionComprobante` | `AUTORIZADO`, `NO AUTORIZADO`, `EN PROCESO` |
+
+La autorización es asíncrona: `esperar_autorizacion()` reintenta mientras el
+estado sea `EN PROCESO`.
+
+### Errores
+
+Todos heredan de `ErrorFacturacion`:
+
+| Excepción | Cuándo |
+|---|---|
+| `ErrorValidacion` | Los datos del comprobante no cumplen las reglas |
+| `ErrorCertificado` | El `.p12` no se abre, no es RSA o está vencido |
+| `ErrorFirma` | No se pudo firmar o la verificación falla |
+| `ErrorSRI` | Fallo de comunicación (red, HTTP 5xx, SOAP Fault) |
+| `ErrorRecepcion` | El SRI devolvió el comprobante |
+| `ErrorAutorizacion` | El SRI no autorizó el comprobante |
+
+---
+
+## Interfaz de línea de comandos
+
+```bash
+sri-fe catalogos                                   # tablas de códigos del SRI
+sri-fe catalogos --json
+
+sri-fe clave --tipo 01 --ruc 1790012345001 --serie 001001 \
+             --secuencial 1 --codigo 12345678 --fecha 08/10/2026
+sri-fe clave --clave 0810202601179001234500110010010000000011234567819
+
+sri-fe ejemplo --salida ./salida                   # XML de los 6 comprobantes
+sri-fe firmar salida/factura.xml --certificado firmante.p12 --clave-clave mi-clave
+sri-fe verificar salida/factura_firmado.xml --certificado firmante.p12 --clave-clave mi-clave
+
+sri-fe autorizar 0810202601179001234500110010010000000011234567819 --ambiente pruebas
+sri-fe enviar salida/factura_firmado.xml --ambiente pruebas
+```
+
+---
+
+## Catálogos
+
+`factec.catalogos` expone las tablas del SRI como `Enum` de
+cadenas (se pueden pasar directamente a los modelos) y como diccionarios
+`{codigo: descripción}`.
+
+```python
+from factec.catalogos import (
+    Ambiente, TipoEmision, TipoComprobante, TipoIdentificacion, FormaPago,
+    CodigoImpuesto, CodigoRetencion, TarifaIva, TarifaRetencionIva,
+    MotivoTraslado, TipoSujetoRetenido, PagoLocExt, Moneda,
+    DESCRIPCION_FORMA_PAGO, PORCENTAJE_IVA,
+)
+```
+
+| Tabla | Contenido |
+|---|---|
+| `TipoComprobante` | 01 factura, 03 liquidación, 04 nota de crédito, 05 nota de débito, 06 guía de remisión, 07 retención |
+| `TipoIdentificacion` | 04 RUC, 05 cédula, 06 pasaporte, 07 consumidor final, 08 exterior |
+| `FormaPago` | 01, 15, 16, 17, 18, 19, 20, 21 |
+| `TarifaIva` | 0 (0%), 2 (12%), 3 (14%), 4 (15%), 5 (5%), 6 (no objeto), 7 (exento), 8 (diferenciado) |
+| `CodigoImpuesto` | 2 IVA, 3 ICE, 5 IRBPNR |
+| `CodigoRetencion` | 1 renta, 2 IVA, 6 ISD |
+| `MotivoTraslado` | 01 … 10 |
+| `Ambiente` / `TipoEmision` | 1 pruebas / 2 producción · 1 normal / 2 contingencia |
+
+---
+
+## API principal
+
+### Fachada
+
+| Miembro | Descripción |
+|---|---|
+| `EmisorElectronico(emisor, certificado=..., clave_certificado=..., ambiente=1)` | Configura emisor, certificado y ambiente |
+| `.factura(...)`, `.liquidacion_compra(...)`, `.nota_credito(...)`, `.nota_debito(...)`, `.retencion(...)`, `.guia_remision(...)` | Construyen cada comprobante |
+| `.firmar(comprobante, algoritmo="sha1")` | Devuelve el XML firmado |
+| `.emitir(comprobante, enviar=True)` | Ciclo completo; `enviar=False` solo construye y firma |
+| `.enviar(...)`, `.consultar_autorizacion(clave)` | Envío y consulta puntual |
+| `.siguiente_secuencial(tipo)` | Contador en memoria por tipo de comprobante |
+
+### Consulta del catastro de RUC
+
+```python
+from factec import consultar_ruc, existe_ruc
+
+datos = consultar_ruc("0703886697001")
+datos.razon_social            # 'URDIN GONZALEZ JOHNNY EDGAR'
+datos.obligado_contabilidad   # False
+datos.es_rimpe                # True
+datos.regimen_rimpe_texto     # 'CONTRIBUYENTE NEGOCIO POPULAR - RÉGIMEN RIMPE'
+datos.como_config()           # dict listo para prueba_config.json
+
+existe_ruc("0703886697001")   # True / False
+```
+
+### Objetos de datos
+
+`Emisor`, `Receptor`, `Detalle`, `Impuesto`, `Pago`, `Compensacion`, `Motivo`,
+`Reembolso`, `DetalleReembolso`, `ImpuestoReembolso`, `DocSustento`,
+`ImpuestoDocSustento`, `ImpuestoRetencion`, `PagoRetencion`, `Destinatario`,
+`DetalleGuia`.
+
+Los importes usan `Decimal`; pueden pasarse como `int`, `float`, `str` o
+`Decimal` y se convierten sin arrastrar el error binario del `float`.
+
+`Impuesto(codigo_porcentaje=TarifaIva.IVA_15)` calcula la tarifa y el valor solo:
+la tarifa sale del catálogo y el valor es `base × tarifa / 100` redondeado a 2
+decimales (con `base` = `cantidad × precioUnitario − descuento`).
+
+### Resultado de emisión
+
+| Atributo | Descripción |
+|---|---|
+| `clave_acceso` | Clave de 49 dígitos |
+| `xml_sin_firma`, `xml_firmado` | XML en cada etapa |
+| `recepcion`, `autorizacion` | Respuestas del SRI |
+| `recepcionada`, `autorizada` | Atajos booleanos |
+| `numero_autorizacion`, `xml_autorizado`, `mensajes` | Datos de la autorización |
+| `lanzar_si_fallo()` | Lanza la excepción adecuada si algo falló |
+
+---
+
+## Validación contra los XSD
+
+Los esquemas oficiales del SRI **no declaran** el elemento `ds:Signature`, por lo
+que la validación XSD aplica al XML **sin firmar**; la firma se valida por
+separado (`verificar_firma`). El flujo correcto es: generar → validar → firmar → enviar.
+
+Para ejecutar las pruebas que validan contra los XSD, indique dónde están:
+
+```bash
+SRI_XSD_DIR=/ruta/a/los/xsd pytest
+```
+
+Las pruebas se saltan solas si no encuentra los esquemas, y **no** se incluyen en
+el paquete por no redistribuir material de terceros. Obténgalos de la
+documentación de comprobantes electrónicos del SRI.
+
+---
+
+## Notas y limitaciones
+
+- **Secuenciales:** `EmisorElectronico` lleva un contador **en memoria**. Si la
+  aplicación se reinicia hay que fijarlo con `secuencial_inicial` o pasar
+  `secuencial` explícito. Persistir la numeración es responsabilidad de la
+  aplicación.
+- **Certificado:** se exige RSA. El paquete no comprueba la cadena de confianza
+  ni la revocación; para eso use `cryptography` o su proveedor de confianza.
+- **`numDocSustento`** en el comprobante de retención 2.0.0 son **15 dígitos sin
+  guiones** (por ejemplo `001001000000001`).
+- **`SOAPAction`**: el SRI exige `SOAPAction` **vacío** en sus webservices; con
+  otro valor responde un SOAP Fault. El cliente ya lo envía así.
+- **RIDE (PDF):** este paquete **no** genera el RIDE. Cubre la emisión
+  electrónica; el RIDE se puede construir con el XML autorizado que devuelve
+  `resultado.xml_autorizado`.
+- Los catálogos corresponden a las tablas publicadas por el SRI; conviene
+  revisarlos si el SRI publica cambios.
+
+---
+
+## Estructura del proyecto
+
+```
+factec/
+├── pyproject.toml
+├── README.md
+├── src/factec/
+│   ├── __init__.py         # API pública
+│   ├── __main__.py         # CLI (sri-fe)
+│   ├── catalogos.py        # tablas de códigos del SRI
+│   ├── clave_acceso.py     # clave de 49 dígitos (módulo 11)
+│   ├── modelos.py          # dataclasses de datos
+│   ├── emisor.py           # fachada EmisorElectronico
+│   ├── excepciones.py
+│   ├── comprobantes/       # un generador de XML por comprobante
+│   ├── firma/              # XAdES-BES
+│   ├── sri/                # endpoints, cliente SOAP y consulta de RUC
+│   └── django/             # app de Django: modelos, admin, servicios y tareas
+├── examples/
+└── tests/
+```
+
+---
+
+## Ejemplos y pruebas
+
+```bash
+python examples/factura_basica.py          # genera XML (sin certificado ni red)
+python examples/prueba_real.py --config prueba_config.json --solo-diagnostico
+python examples/prueba_real.py --config prueba_config.json   # emisión real en pruebas
+SRI_XSD_DIR=/tmp/sri_xsd pytest            # 205 pruebas
+```

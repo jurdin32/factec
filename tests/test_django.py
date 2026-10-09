@@ -994,3 +994,25 @@ def test_emitir_con_objeto_sin_meta_no_falla(configuracion, cliente_falso):
     # Sin vínculo no hay idempotencia: cada llamada emite un comprobante nuevo.
     segundo = facturacion.emitir(VentaSuelta(), encolar=False, intentos=1, espera=0)
     assert segundo.pk != registro.pk
+
+
+def test_sin_celery_instalado_se_emite_igual(configuracion, cliente_falso, monkeypatch):
+    """``factec`` sin el extra ``[django]`` no trae Celery: se emite en el acto.
+
+    Antes fallaba con ``ModuleNotFoundError``; el paquete lo trata como «no hay
+    cola» y sigue de forma síncrona.
+    """
+    import sys
+
+    from factec.django import services
+
+    # Simula que Celery no está instalado.
+    monkeypatch.setitem(sys.modules, "celery", None)
+
+    registro = services.crear_factura(receptor=_receptor(), detalles=[_detalle()])
+    assert services.encolar(registro) is None
+    assert services.encolar_autorizacion(registro) is None
+
+    # El camino síncrono (el que usa ``emitir`` cuando no hay cola) funciona igual.
+    emitido = services.procesar(registro, intentos=1, espera=0)
+    assert emitido.autorizado
