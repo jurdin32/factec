@@ -326,11 +326,11 @@ los archivos del proyecto.
 
 ```bash
 # crea la configuración del emisor con lo que publica el SRI (y lo confirma)
-python manage.py importar_ruc_sri --ruc 0703886697001 --dir-matriz "PANAMERICANA Y CARCHI"
+python manage.py importar_ruc_sri --ruc 1234567890001 --dir-matriz "ALGUN LUGAR"
 
 # sin consultar al SRI y sin preguntar (para instalaciones desatendidas)
-python manage.py importar_ruc_sri --ruc 0703886697001 --sin-consultar \
-    --dir-matriz "PANAMERICANA Y CARCHI" --sin-confirmar
+python manage.py importar_ruc_sri --ruc 1234567890001 --sin-consultar \
+    --dir-matriz "ALGUN LUGAR" --sin-confirmar
 
 python manage.py archivar_comprobantes            # reescribe los archivos de los ya emitidos
 python manage.py archivar_comprobantes --desde 2026-10-01 --estado DEVUELTO --simular
