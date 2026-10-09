@@ -348,6 +348,11 @@ comprobar()                 # sale a la red (o usa lo guardado, si es de hoy)
 esta_al_dia(), actualizacion_disponible(), ultima_conocida()
 ```
 
+La comprobación pregunta primero a la API de GitHub y, si no responde (suele ser
+porque limita a 60 consultas por hora y dirección), pregunta por `git ls-remote`,
+que no limita. Con `GITHUB_TOKEN` o `GH_TOKEN` en el entorno el límite de la API
+sube a 5000 consultas por hora.
+
 Se apaga con `FACTEC_SIN_AVISOS=1` (no enseñar nada) y con `FACTEC_SIN_COMPROBAR=1`
 (no salir a la red). `FACTEC_REPOSITORIO=usuario/repo` mira otro repositorio y
 `FACTEC_CACHE_DIR=...` guarda el estado en otro sitio. Nada de esto lanza

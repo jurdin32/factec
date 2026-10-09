@@ -290,3 +290,61 @@ def test_se_puede_apuntar_a_otro_repositorio(monkeypatch):
 
     assert "otro/factec" in actualizacion.comando_para_actualizar()
     assert actualizacion.repositorio_actual() == "otro/factec"
+
+
+# --------------------------------------------------- la API limitada y el plan B
+
+
+def revienta(mensaje):
+    def _revienta(*_args, **_kwargs):
+        raise OSError(mensaje)
+
+    return _revienta
+
+
+def test_si_la_api_falla_se_pregunta_por_git(monkeypatch):
+    """GitHub limita a 60 consultas por hora: ``git ls-remote`` no limita."""
+
+    class Resultado:
+        stdout = "abc123\trefs/tags/v1.11.0\ndef456\trefs/tags/v1.12.0\n"
+        returncode = 0
+
+    def git_falso(orden, **opciones):
+        assert orden[:4] == ["git", "ls-remote", "--tags", "--refs"]
+        assert opciones["env"]["GIT_TERMINAL_PROMPT"] == "0"     # que no pregunte nada
+        return Resultado()
+
+    monkeypatch.setattr(actualizacion, "_etiquetas_por_api", revienta("HTTP Error 403"))
+    monkeypatch.setattr(actualizacion.subprocess, "run", git_falso)
+
+    assert actualizacion.obtener_ultima() == "1.12.0"
+
+
+def test_si_no_responde_ninguno_se_dice(monkeypatch):
+    monkeypatch.setattr(actualizacion, "_etiquetas_por_api", revienta("403 rate limit"))
+    monkeypatch.setattr(actualizacion, "_etiquetas_por_git", revienta("git no está"))
+
+    with pytest.raises(actualizacion._ErrorDeConsulta, match="git tampoco"):
+        actualizacion.obtener_ultima()
+
+    # Y en el informe se ve, sin reventar nada.
+    informe = actualizacion.comprobar()
+    assert "403 rate limit" in informe.error
+    assert informe.ultima is None
+
+
+def test_se_puede_usar_un_token_de_github(monkeypatch):
+    """Con ``GITHUB_TOKEN`` el límite de la API sube a 5000 consultas por hora."""
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_de-ejemplo")
+    vistas = {}
+
+    def abrir(peticion, timeout=None):
+        vistas.update(peticion.headers)
+        return Respuesta(["v1.12.0"])
+
+    actualizacion.obtener_ultima(abrir=abrir)
+
+    assert any(
+        clave.lower() == "authorization" and valor == "Bearer ghp_de-ejemplo"
+        for clave, valor in vistas.items()
+    )

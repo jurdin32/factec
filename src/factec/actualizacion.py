@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import textwrap
 import urllib.request
@@ -238,25 +239,85 @@ def _etiquetas(
     tiempo: float = _TIEMPO_DE_ESPERA,
     abrir: Optional[Callable[..., Any]] = None,
 ) -> List[str]:
-    """Etiquetas del repositorio, de la más vieja a la más nueva (lanza si falla)."""
+    """Etiquetas del repositorio, de la más vieja a la más nueva (lanza si falla).
+
+    Primero se pregunta a la API de GitHub y, si no responde (suele ser porque
+    limita a 60 consultas por hora y dirección: con ``GITHUB_TOKEN`` en el entorno
+    el límite es mucho mayor), se pregunta por ``git ls-remote``, que no limita.
+    Con ``abrir`` propio —lo que usan las pruebas— se usa solo la API.
+    """
+    if abrir is not None:
+        return _etiquetas_por_api(repositorio=repositorio, tiempo=tiempo, abrir=abrir)
+
+    try:
+        return _etiquetas_por_api(repositorio=repositorio, tiempo=tiempo, abrir=None)
+    except Exception as exc_api:  # noqa: BLE001 - se prueba el otro camino
+        try:
+            return _etiquetas_por_git(repositorio=repositorio, tiempo=tiempo)
+        except Exception as exc_git:  # noqa: BLE001 - ninguno de los dos respondió
+            raise _ErrorDeConsulta(
+                f"la API de GitHub falló ({exc_api}) y git tampoco respondió ({exc_git})"
+            ) from exc_git
+
+
+class _ErrorDeConsulta(RuntimeError):
+    """No se ha podido preguntar si hay versiones nuevas."""
+
+
+def _etiquetas_por_api(
+    *,
+    repositorio: Optional[str] = None,
+    tiempo: float = _TIEMPO_DE_ESPERA,
+    abrir: Optional[Callable[..., Any]] = None,
+) -> List[str]:
+    """Lee las etiquetas con la API de GitHub (60 consultas por hora sin credencial)."""
     if abrir is None:
         abrir = urllib.request.urlopen
 
     url = _URL_TAGS.format(repositorio=repositorio or repositorio_actual())
-    peticion = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": f"factec/{version_instalada()}",
-        },
-    )
-    with abrir(peticion, timeout=tiempo) as respuesta:
+    cabeceras = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": f"factec/{version_instalada()}",
+    }
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        # Con credencial, el límite por dirección sube de 60 a 5000 consultas/hora.
+        cabeceras["Authorization"] = f"Bearer {token}"
+
+    with abrir(urllib.request.Request(url, headers=cabeceras), timeout=tiempo) as respuesta:
         datos = json.loads(respuesta.read().decode("utf-8"))
 
     etiquetas = sorted(
-        # Sin la «v» delante: el prefijo es una convención de la etiqueta, no de
-        # la versión, y así el enlace de comparación sale bien.
         (str(etiqueta.get("name", "")).strip().lstrip("vV") for etiqueta in datos),
+        key=normalizar_version,
+    )
+    etiquetas = [etiqueta for etiqueta in etiquetas if etiqueta]
+    if not etiquetas:
+        raise ValueError("El repositorio no tiene etiquetas de versión.")
+    return etiquetas
+
+
+def _etiquetas_por_git(
+    *, repositorio: Optional[str] = None, tiempo: float = _TIEMPO_DE_ESPERA
+) -> List[str]:
+    """Lee las etiquetas con ``git ls-remote``, que no tiene límite de consultas."""
+    url = f"https://github.com/{repositorio or repositorio_actual()}.git"
+    entorno = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="echo")
+    resultado = subprocess.run(
+        ["git", "ls-remote", "--tags", "--refs", url],
+        capture_output=True,
+        text=True,
+        timeout=max(tiempo, 10.0),
+        env=entorno,
+        check=True,
+    )
+
+    etiquetas = sorted(
+        (
+            linea.split("refs/tags/")[-1].strip().lstrip("vV")
+            for linea in resultado.stdout.splitlines()
+            if "refs/tags/" in linea
+        ),
         key=normalizar_version,
     )
     etiquetas = [etiqueta for etiqueta in etiquetas if etiqueta]

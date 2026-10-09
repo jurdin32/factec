@@ -255,6 +255,9 @@ Cómo se comporta, para que no haya sorpresas:
 * **Se puede apagar**: `FACTEC_SIN_AVISOS=1` (nada de avisos) y
   `FACTEC_SIN_COMPROBAR=1` (no salir a la red). También `NO_COLOR=1` para los colores,
   que de todos modos se apagan solos si la salida no es una terminal.
+* **Dos caminos para preguntar**: la API de GitHub y, si limita las consultas (60 por
+  hora y dirección), `git ls-remote`, que no limita. Con `GITHUB_TOKEN` en el entorno
+  el límite de la API sube a 5000 por hora.
 * **`pip` no puede enseñarlo él mismo**: pip no ejecuta código del paquete después
   de instalar, así que el recuadro aparece la primera vez que se usa el paquete
   nuevo (que es cuando importa) y no en la salida de `pip install -U`.
@@ -585,7 +588,7 @@ informe.certificado.nombre, informe.certificado.vencido()
 | [docs/flower.md](docs/flower.md) | El panel de Celery: pantallas, cómo seguir una factura y qué mirar cuando algo falla |
 | [docs/prueba-real.md](docs/prueba-real.md) | Emitir de verdad contra el ambiente de pruebas del SRI |
 | [examples/](examples/) | Scripts listos para ejecutar (incluye `celery.py` para copiar) |
-| [tests/](tests/) | 572 pruebas, incluida la validación contra los XSD oficiales |
+| [tests/](tests/) | 575 pruebas, incluida la validación contra los XSD oficiales |
 
 ---
 
