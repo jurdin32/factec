@@ -233,6 +233,11 @@ va a la cola y el worker la resuelve; para eso necesita **Redis**, el **cliente*
 las tres cosas, el paquete lo dice en el log y emite de forma síncrona:
 «*No hay broker de Celery configurado: se emite de forma síncrona*».
 
+Dos tropiezos habituales, ya resueltos en la documentación: el worker no arranca
+sin el cliente del broker (`pip install redis`), y en macOS y Windows las tareas
+fallan con `ValueError: not enough values to unpack` si no se pone
+`FORKED_BY_MULTIPROCESSING=1` en el `celery.py` (el pool usa «spawn»).
+
 El SRI es un servicio remoto: no hay nada que instalar ni levantar en su máquina.
 
 ### Comandos que vienen con el paquete

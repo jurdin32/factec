@@ -1006,7 +1006,14 @@ cualquier Django. Es el único paso que no viene hecho.
 # mi_proyecto/celery.py
 import os
 
-from celery import Celery
+# En macOS y Windows el pool de procesos usa «spawn» (no «fork») y, sin esta
+# variable, Celery no prepara el registro de tareas en los procesos hijos: la
+# tarea llega al worker y falla con «ValueError: not enough values to unpack
+# (expected 3, got 0)». Con ella, cada hijo prepara las tareas igual que si el
+# pool hubiera hecho execv.
+os.environ.setdefault("FORKED_BY_MULTIPROCESSING", "1")
+
+from celery import Celery  # noqa: E402  (después de la variable, a propósito)
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "mi_proyecto.settings")
 
@@ -1014,6 +1021,13 @@ app = Celery("mi_proyecto")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()      # encuentra factec.django.tasks: no hay que registrar nada
 ```
+
+> **Si las tareas fallan al ejecutarse**, con el error
+> ``ValueError: not enough values to unpack (expected 3, got 0)`` en
+> ``celery/app/trace.py``, es ese caso de «spawn»: ponga la variable de arriba en
+> el ``celery.py`` (o arranque el worker con ``--pool=threads``, o con
+> ``FORKED_BY_MULTIPROCESSING=1`` delante del comando). En Linux con «fork» no
+> hace falta.
 
 ```python
 # mi_proyecto/__init__.py
@@ -1052,7 +1066,7 @@ CELERY_BEAT_SCHEDULE = {
 
 ```bash
 celery -A mi_proyecto worker -l info -c 4   # -c: procesos (por omisión, uno por CPU)
-celery -A mi_proyecto beat -l info          # opcional: revisión y reintentos
+celery -A mi_proyecto beat -l info          # opcional: revisión de la firma y reintentos
 
 # Comprobar que el worker tiene las tareas del paquete:
 celery -A mi_proyecto inspect registered | grep sri_fe
