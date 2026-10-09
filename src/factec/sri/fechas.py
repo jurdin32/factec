@@ -27,6 +27,7 @@ __all__ = [
     "MENSAJE_EXTEMPORANEA",
     "MINUTOS_TOLERANCIA",
     "hoy_en_ecuador",
+    "fecha_para_firmar",
     "validar_fecha_emision",
 ]
 
@@ -55,6 +56,22 @@ def hoy_en_ecuador(momento: Optional[datetime] = None) -> date:
     if ahora.tzinfo is None:
         ahora = ahora.replace(tzinfo=timezone.utc)
     return (ahora.astimezone(timezone.utc) + DESFASE_ECUADOR).date()
+
+
+def fecha_para_firmar(
+    explicita: Optional[date] = None,
+    *,
+    momento: Optional[datetime] = None,
+) -> date:
+    """Fecha de emisión que se usa al firmar: la de hoy en Ecuador.
+
+    El SRI exige que el comprobante se firme el día de su emisión (o, como muy
+    tarde, dentro del rango de tolerancia). Por eso un comprobante que quedó
+    preparado y se emite días después se firma con la fecha del día de la firma, y
+    no con la fecha en la que se preparó. Una fecha indicada a propósito
+    (``explicita``) se respeta tal cual.
+    """
+    return explicita or hoy_en_ecuador(momento)
 
 
 def validar_fecha_emision(

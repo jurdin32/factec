@@ -156,6 +156,39 @@ validar_fecha_emision(hoy_en_ecuador().replace(day=...))   # lanza ErrorValidaci
 Si prefiere emitir de todos modos (por ejemplo para reproducir un error), ponga
 `VALIDAR_FECHA_EMISION = False` en la clase o instancia del comprobante.
 
+### Un comprobante se firma el día en que se emite
+
+La fecha de emisión la valida el SRI contra su propio reloj, así que no puede ser la
+fecha en la que se preparó el comprobante: si un XML quedó guardado y se firma días
+después, hay que cambiarle la fecha. Al hacerlo **cambia también la clave de
+acceso**, porque la clave empieza por la fecha:
+
+```python
+from datetime import date
+
+from factec.fechado import cambiar_fecha_de_emision
+
+cambiado = cambiar_fecha_de_emision(xml_sin_firmar, date(2026, 10, 8))
+cambiado.fecha_anterior       # date(2026, 10, 1)
+cambiado.fecha                # date(2026, 10, 8)
+cambiado.clave_anterior       # la clave vieja
+cambiado.clave_acceso         # la nueva, ya con la fecha nueva
+cambiado.xml                  # listo para firmar
+
+# Admite también «08/10/2026», «2026-10-08» y datetime
+cambiar_fecha_de_emision(xml, "08/10/2026")
+```
+
+Solo funciona con el XML **sin firmar** (la firma cubre el contenido anterior); si
+le pasa uno firmado, lanza `ErrorValidacion` explicándolo. El resto del comprobante
+—número, secuencial, código numérico— se conserva.
+
+En la línea de comandos:
+
+```bash
+sri-fe fecha factura.xml --fecha 2026-10-08 --salida factura_hoy.xml
+```
+
 ## Firma electrónica (XAdES-BES)
 
 ```python
@@ -268,6 +301,10 @@ sri-fe leer factura_proveedor.xml --json
 
 sri-fe verificar salida/factura_firmado.xml        # firma, clave, fecha y totales
 sri-fe verificar salida/factura_firmado.xml --solo-firma   # solo las firmas XAdES-BES
+
+sri-fe revisar salida/factura.xml --certificado firmante.p12 --clave-clave mi-clave
+sri-fe revisar --certificado firmante.p12 --clave-clave mi-clave   # solo la firma
+sri-fe fecha salida/factura.xml --fecha 2026-10-08 --salida factura_hoy.xml
 
 sri-fe autorizar 0810202601179001234500110010010000000011234567819 --ambiente pruebas
 sri-fe enviar salida/factura_firmado.xml --ambiente pruebas
@@ -448,6 +485,58 @@ autorizacion = verificar_en_el_sri(clave_acceso, ambiente=1)
 autorizacion.autorizada
 autorizacion.estado          # "AUTORIZADO", "NO AUTORIZADO", "NO ENCONTRADO"…
 autorizacion.mensajes
+```
+
+## Revisar antes de emitir
+
+`factec.revision` mira **lo que puede impedir la emisión** sin contactar con el SRI,
+para no firmar ni enviar algo que va a volver rechazado (con el secuencial ya
+gastado):
+
+| Comprobación | Detalle |
+|---|---|
+| **Certificado** | Que se pueda abrir, que esté vigente y que su RUC sea el del emisor |
+| **Vencimiento próximo** | Aviso (no error) con `DIAS_AVISO_CERTIFICADO` días de antelación |
+| **Fecha de emisión** | Dentro de la ventana del SRI |
+| **Datos** | Totales, clave de acceso y el resto de reglas del SRI |
+
+```python
+from factec.revision import revisar_certificado, revisar_emision, revisar_xml
+
+informe = revisar_emision(comprobante, certificado)     # el comprobante sin firmar
+informe.puede_emitir      # False si hay algo que el SRI rechazaría
+informe.problemas         # ["El certificado de firma está vencido desde el 14/10/2026…"]
+informe.avisos            # ["El certificado de firma vence el 14/10/2026 (en 6 día(s))…"]
+informe.certificado.vencido, informe.certificado.dias_restantes, informe.certificado.ruc
+informe.fecha_en_rango, informe.datos_validos, informe.clave_valida
+informe.resumen()         # una línea para un log o un mensaje
+informe.a_dict()          # listo para JSON
+
+# Un comprobante ya construido (el XML guardado)
+revisar_xml(xml, certificado=certificado, emisor=emisor)
+
+# Solo el certificado (por ejemplo, al arrancar o en un chequeo programado)
+revisar_certificado(certificado, emisor=emisor, dias_aviso=30)
+```
+
+El emisor lo revisa solo antes de firmar, así que un certificado vencido no llega
+a enviarse:
+
+```python
+from factec import EmisorElectronico
+from factec.excepciones import ErrorRevision
+
+emisor = EmisorElectronico(emisor=emisor_, certificado="firmante.p12",
+                           clave_certificado="mi-clave")
+
+informe = emisor.revisar(factura)        # consultar sin emitir
+try:
+    resultado = emisor.emitir(factura)   # revisa y, si hay problemas, no emite
+except ErrorRevision as error:
+    print(error.informe.problemas)       # lo que hay que corregir
+    print(error.informe.avisos)          # lo que conviene atender
+
+emisor.emitir(factura, revisar=False)    # omitir la revisión (no recomendado)
 ```
 
 ## Validación contra los XSD

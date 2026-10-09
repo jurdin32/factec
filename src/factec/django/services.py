@@ -36,8 +36,17 @@ from ..comprobantes import (
 )
 from ..modelos import Destinatario, Detalle, Motivo, Pago, Receptor, Reembolso
 from ..emisor import EmisorElectronico
-from ..excepciones import ErrorFacturacion, ErrorRecepcion
+from ..excepciones import ErrorFacturacion, ErrorRecepcion, ErrorRevision
+from ..fechado import cambiar_fecha_de_emision
 from ..firma import Certificado, firmar_xml
+from ..revision import (
+    DIAS_AVISO_CERTIFICADO,
+    InformeRevision,
+    revisar_certificado,
+    revisar_emision,
+    revisar_xml,
+)
+from ..sri import fechas
 from ..sri.soap import (
     ESTADO_AUTORIZADO,
     ESTADO_EN_PROCESO,
@@ -63,6 +72,9 @@ __all__ = [
     "siguiente_secuencial",
     "emisor_electronico",
     "mensajes_a_dict",
+    "revisar",
+    "revisar_comprobante",
+    "actualizar_fecha",
 ]
 
 logger = logging.getLogger(__name__)
@@ -139,6 +151,172 @@ def _metricas(comprobante: Comprobante) -> Dict[str, Any]:
         "razon_social_receptor": getattr(receptor, "razon_social", "") or "",
         "identificacion_receptor": getattr(receptor, "identificacion", "") or "",
     }
+
+
+# ----------------------------------------------------- revisión previa
+
+
+def _certificado_o_aviso(certificado: Any = None) -> tuple[Any, str]:
+    """Certificado de firma y, si no se pudo cargar, el motivo por el que no."""
+    if certificado is not None:
+        return certificado, ""
+    try:
+        return conf.certificado(), ""
+    except Exception as exc:  # noqa: BLE001 - se informa del motivo, no se revienta
+        return None, str(exc)
+
+
+def _dias_aviso(dias_aviso: Optional[int]) -> int:
+    if dias_aviso is not None:
+        return int(dias_aviso)
+    return int(conf.obtener("DIAS_AVISO_CERTIFICADO", DIAS_AVISO_CERTIFICADO))
+
+
+def _motivo_del_certificado(informe: InformeRevision, motivo: str) -> InformeRevision:
+    """Sustituye el aviso genérico por el motivo real de no poder cargar la firma."""
+    if motivo:
+        informe.sustituir_problema(
+            "No hay certificado de firma",
+            f"No se pudo cargar el certificado de firma: {motivo}",
+        )
+    return informe
+
+
+def revisar_comprobante(
+    comprobante: Comprobante,
+    *,
+    certificado: Any = None,
+    dias_aviso: Optional[int] = None,
+    momento: Any = None,
+) -> InformeRevision:
+    """Revisa un comprobante (sin firmar) antes de emitirlo.
+
+    Comprueba el certificado de la configuración, la fecha de emisión, la clave de
+    acceso y los datos del comprobante. No contacta con el SRI ni consume
+    secuenciales::
+
+        informe = servicios.revisar_comprobante(comprobante)
+        if not informe.puede_emitir:
+            return JsonResponse({"problemas": informe.problemas}, status=400)
+    """
+    certificado, motivo = _certificado_o_aviso(certificado)
+    informe = revisar_emision(
+        comprobante,
+        certificado,
+        dias_aviso=_dias_aviso(dias_aviso),
+        momento=momento,
+    )
+    return _motivo_del_certificado(informe, motivo)
+
+
+def revisar(
+    registro: models.ComprobanteEmitido,
+    *,
+    certificado: Any = None,
+    dias_aviso: Optional[int] = None,
+    momento: Any = None,
+) -> InformeRevision:
+    """Revisa un comprobante ya registrado: su certificado y su XML guardado.
+
+    Es lo que ejecuta :func:`procesar` antes de firmar y enviar, y lo que conviene
+    consultar en una vista para avisar al usuario antes de emitir.
+    """
+    certificado, motivo = _certificado_o_aviso(certificado)
+    opciones = {"dias_aviso": _dias_aviso(dias_aviso), "momento": momento}
+    xml = registro.xml_sin_firma or registro.xml_firmado
+
+    if xml:
+        informe = revisar_xml(xml, certificado=certificado, emisor=conf.emisor(), **opciones)
+    else:
+        informe = InformeRevision(
+            tipo=registro.tipo_comprobante,
+            numero=registro.numero_comprobante,
+            clave_acceso=registro.clave_acceso,
+            fecha_emision=registro.fecha_emision,
+            fecha_de_hoy=fechas.hoy_en_ecuador(momento),
+        )
+        informe.heredar_del_certificado(
+            revisar_certificado(certificado, emisor=conf.emisor(), **opciones)
+        )
+    return _motivo_del_certificado(informe, motivo)
+
+
+#: Alias interno: en ``firmar`` y ``enviar`` hay un parámetro llamado ``revisar``
+#: que taparía el nombre de la función.
+_revisar_registro = revisar
+
+
+def _lanzar_si_no_puede_emitir(informe: InformeRevision) -> None:
+    """Convierte un informe con problemas en :class:`ErrorRevision`."""
+    if not informe.puede_emitir:
+        raise ErrorRevision(informe=informe)
+
+
+def _anotar_aviso(registro: models.ComprobanteEmitido, exc: Exception) -> None:
+    """Deja el motivo por el que no se emitió en el registro y en sus archivos."""
+    registro.estado = models.EstadoComprobante.ERROR
+    registro.error = str(exc)
+    registro.save(update_fields=["estado", "error", "actualizado"])
+    _guardar_archivos(registro, **{archivos.NOMBRE_ERROR: f"{type(exc).__name__}: {exc}"})
+    logger.warning("No se emitió el comprobante %s: %s", registro.clave_acceso, exc)
+
+
+def actualizar_fecha(
+    registro: models.ComprobanteEmitido,
+    *,
+    fecha: Optional[date] = None,
+) -> models.ComprobanteEmitido:
+    """Refecha el comprobante a la fecha del día en que se va a firmar.
+
+    Un comprobante que quedó sin enviar se firma **el día en que se emite**: el SRI
+    devuelve con «FECHA EMISIÓN EXTEMPORANEA» cualquier fecha fuera de su rango y la
+    fecha de emisión dejó de ser la del documento. Esta función cambia
+    ``fechaEmision`` en el XML guardado, recalcula la clave de acceso y deja el
+    registro en ``BORRADOR``, listo para firmar (la firma anterior se descarta,
+    porque cubría el contenido viejo).
+
+    Solo se puede hacer mientras el comprobante no se haya enviado: cuando el SRI ya
+    lo recibió, su clave está registrada allí y no se puede cambiar.
+    """
+    fecha = fecha or fechas.hoy_en_ecuador()
+    if registro.intentos:
+        raise ErrorFacturacion(
+            f"El comprobante {registro.clave_acceso} ya se envió al SRI, así que no se "
+            "puede cambiar su fecha de emisión: emita uno nuevo con los datos corregidos."
+        )
+    if registro.fecha_emision == fecha:
+        return registro
+
+    xml = registro.xml_sin_firma
+    if not xml:
+        raise ErrorFacturacion(
+            "No se conserva el XML sin firmar del comprobante, así que no se puede "
+            "cambiar la fecha de emisión: vuelva a emitirlo desde el documento (o "
+            "active FACTURACION_ELECTRONICA['GUARDAR_XML'])."
+        )
+
+    cambiado = cambiar_fecha_de_emision(xml, fecha)
+    registro.fecha_emision = cambiado.fecha
+    registro.clave_acceso = cambiado.clave_acceso
+    registro.xml_sin_firma = cambiado.xml
+    registro.xml_firmado = ""
+    registro.estado = models.EstadoComprobante.BORRADOR
+    registro.mensajes = []
+    registro.error = ""
+    registro.save(
+        update_fields=[
+            "fecha_emision", "clave_acceso", "xml_sin_firma", "xml_firmado",
+            "estado", "mensajes", "error", "actualizado",
+        ]
+    )
+    logger.info(
+        "Comprobante %s refechado del %s al %s (la firma anterior se descarta).",
+        registro.clave_acceso, cambiado.fecha_anterior, cambiado.fecha,
+    )
+    # El XML y las respuestas quedan en la carpeta del comprobante, ahora con la
+    # clave nueva dentro del nombre.
+    _guardar_archivos(registro, **{archivos.NOMBRE_SIN_FIRMA: cambiado.xml})
+    return registro
 
 
 # --------------------------------------------------------------- registro
@@ -221,7 +399,7 @@ def _comunes(
     return {
         "emisor": conf.emisor(),
         "ambiente": conf.ambiente(),
-        "fecha_emision": fecha_emision or date.today(),
+        "fecha_emision": fecha_emision or fechas.hoy_en_ecuador(),
         "secuencial": secuencial or siguiente_secuencial(tipo),
     }
 
@@ -377,8 +555,20 @@ def firmar(
     *,
     certificado: Optional[Certificado] = None,
     guardar_xml: Optional[bool] = None,
+    revisar: Optional[bool] = None,
 ) -> models.ComprobanteEmitido:
-    """Firma el XML del borrador y guarda el resultado."""
+    """Firma el XML del borrador y guarda el resultado.
+
+    Antes de firmar se revisa el comprobante (certificado vigente, fecha de emisión
+    dentro del rango del SRI, totales, clave de acceso): si algo fallaría, se lanza
+    :class:`~factec.excepciones.ErrorRevision` y **no se firma**. Con
+    ``revisar=False`` se omite (lo usa :func:`procesar`, que ya revisó).
+    """
+    if revisar is None:
+        revisar = bool(conf.obtener("REVISAR_ANTES_DE_EMITIR", True))
+    if revisar:
+        _lanzar_si_no_puede_emitir(_revisar_registro(registro, certificado=certificado))
+
     certificado = certificado or conf.certificado()
     xml_firmado = firmar_xml(
         _xml_del_registro(registro),
@@ -400,12 +590,19 @@ def enviar(
     registro: models.ComprobanteEmitido,
     *,
     guardar_respuesta: Optional[bool] = None,
+    revisar: Optional[bool] = None,
 ) -> RespuestaRecepcion:
     """Envía el comprobante a recepción y actualiza el estado.
 
     La respuesta del SRI se guarda en el registro y en un archivo, para poder
-    demostrar qué contestó (también cuando devuelve el comprobante).
+    demostrar qué contestó (también cuando devuelve el comprobante). Antes de
+    enviar se revisa el comprobante, salvo con ``revisar=False``.
     """
+    if revisar is None:
+        revisar = bool(conf.obtener("REVISAR_ANTES_DE_EMITIR", True))
+    if revisar:
+        _lanzar_si_no_puede_emitir(_revisar_registro(registro))
+
     if guardar_respuesta is None:
         guardar_respuesta = bool(conf.obtener("GUARDAR_XML", True))
     xml = registro.xml_firmado or registro.xml_sin_firma
@@ -517,10 +714,28 @@ def procesar(
         logger.info("El comprobante %s ya está en estado %s", registro.pk, registro.estado)
         return registro
 
+    if registro.fecha_desactualizada:
+        # Quedó sin enviar de otro día: se firma con la fecha de hoy, que es la que
+        # admite el SRI.
+        try:
+            actualizar_fecha(registro)
+        except ErrorFacturacion as exc:
+            _anotar_aviso(registro, exc)
+            return registro
+
+    if bool(conf.obtener("REVISAR_ANTES_DE_EMITIR", True)):
+        informe = revisar(registro, certificado=certificado)
+        if not informe.puede_emitir:
+            # No se firma ni se envía nada: se deja el motivo a la vista (estado
+            # ERROR y error.txt) para que se corrija y se reintente.
+            _anotar_aviso(registro, ErrorRevision(informe=informe))
+
+            return registro
+
     try:
         if firmar_si_falta and not registro.xml_firmado:
-            firmar(registro, certificado=certificado)
-        recepcion = enviar(registro)
+            firmar(registro, certificado=certificado, revisar=False)
+        recepcion = enviar(registro, revisar=False)
     except ErrorFacturacion as exc:
         logger.warning("Fallo al enviar el comprobante %s: %s", registro.pk, exc)
         return registro

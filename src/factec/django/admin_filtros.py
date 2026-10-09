@@ -38,6 +38,7 @@ from django.utils import timezone
 __all__ = [
     "AdminConAjustes",
     "FiltroConCertificado",
+    "FiltroFechaDesactualizada",
     "FiltroEmitido",
     "FiltroPorFecha",
     "FiltroPorImporte",
@@ -185,6 +186,33 @@ class FiltroConCertificado(admin.SimpleListFilter):
             return queryset.exclude(clave_certificado_cifrada="")
         if valor == "sin_clave":
             return queryset.filter(clave_certificado_cifrada="")
+        return queryset
+
+
+class FiltroFechaDesactualizada(admin.SimpleListFilter):
+    """Comprobantes que quedaron sin enviar y ya no son del día de hoy.
+
+    Son los que hay que refechar (o rehacer) antes de firmarlos: el SRI rechaza un
+    comprobante firmado con la fecha de otro día.
+    """
+
+    parameter_name = "fecha_desactualizada"
+    title = "Fecha de emisión"
+
+    def lookups(self, request: Any, model_admin: Any) -> Tuple[Tuple[str, str], ...]:
+        return (
+            ("si", "Sin enviar, de otro día (hay que refechar)"),
+            ("hoy", "Sin enviar, de hoy"),
+        )
+
+    def queryset(self, request: Any, queryset: Any) -> Any:
+        from ..sri import fechas
+
+        hoy = fechas.hoy_en_ecuador()
+        if self.value() == "si":
+            return queryset.filter(intentos=0).exclude(fecha_emision=hoy)
+        if self.value() == "hoy":
+            return queryset.filter(intentos=0, fecha_emision=hoy)
         return queryset
 
 

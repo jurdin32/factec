@@ -6,6 +6,7 @@ Subcomandos disponibles::
     sri-fe clave --tipo 01 --ruc ... ...   # genera/analiza una clave de acceso
     sri-fe firmar entrada.xml --certificado f.p12 --clave-clave s
     sri-fe verificar firmado.xml --certificado f.p12 --clave-clave s
+    sri-fe revisar firmado.xml --certificado f.p12 --clave-clave s   # ¿se puede emitir?
     sri-fe enviar firmado.xml --ambiente pruebas
     sri-fe autorizar 0810...               # consulta el estado en el SRI
     sri-fe ejemplo --salida ./salida       # XML de ejemplo de los 6 comprobantes
@@ -47,7 +48,10 @@ from .clave_acceso import (
 from .emisor import EmisorElectronico
 from .excepciones import ErrorFacturacion, ErrorValidacion
 from .firma import Certificado, firmar_xml, verificar_firma
+from .fechado import cambiar_fecha_de_emision
 from .lectura import leer_comprobante
+from .revision import DIAS_AVISO_CERTIFICADO, revisar_certificado, revisar_xml
+from .sri import fechas
 from .verificacion import verificar_comprobante
 from .modelos import (
     Destinatario,
@@ -174,6 +178,69 @@ def cmd_verificar(args: argparse.Namespace) -> int:
     for problema in informe.problemas:
         print(f"❌ {problema}", file=sys.stderr)
     return 4
+
+
+def cmd_revisar(args: argparse.Namespace) -> int:
+    """Revisa lo que impide emitir: certificado, fecha, totales y clave."""
+    certificado = None
+    if args.certificado:
+        certificado = Certificado.desde_archivo(args.certificado, args.clave_clave or "")
+
+    if args.archivo:
+        xml = Path(args.archivo).read_text(encoding="utf-8")
+        if args.fecha:
+            cambiado = cambiar_fecha_de_emision(xml, args.fecha)
+            xml = cambiado.xml
+            print(
+                f"fecha de emisión: {cambiado.fecha_anterior} → {cambiado.fecha} "
+                f"(clave {cambiado.clave_acceso})",
+                file=sys.stderr,
+            )
+        informe = revisar_xml(
+            xml, certificado=certificado, dias_aviso=args.dias_aviso
+        )
+    else:
+        revisado = revisar_certificado(certificado, dias_aviso=args.dias_aviso)
+        print(json.dumps(revisado.a_dict(), ensure_ascii=False, indent=2))
+        if revisado.ok:
+            print("✅ El certificado se puede usar para firmar.", file=sys.stderr)
+            return 0
+        for problema in revisado.problemas:
+            print(f"❌ {problema}", file=sys.stderr)
+        return 4
+
+    print(json.dumps(informe.a_dict(), ensure_ascii=False, indent=2))
+    if informe.puede_emitir:
+        print(f"✅ {informe.resumen()}", file=sys.stderr)
+        for aviso in informe.avisos:
+            print(f"⚠️  {aviso}", file=sys.stderr)
+        return 0
+    for problema in informe.problemas:
+        print(f"❌ {problema}", file=sys.stderr)
+    return 4
+
+
+def cmd_fecha(args: argparse.Namespace) -> int:
+    """Cambia la fecha de emisión de un comprobante (el día en que se firma)."""
+    actual = None
+    if args.archivo:
+        actual = Path(args.archivo).read_text(encoding="utf-8")
+        xml = actual
+    else:
+        xml = ""
+
+    cambiado = cambiar_fecha_de_emision(xml, args.fecha or fechas.hoy_en_ecuador())
+    if args.salida:
+        Path(args.salida).write_text(cambiado.xml, encoding="utf-8")
+        print(f"✅ Guardado en {args.salida}")
+        print(f"   fecha: {cambiado.fecha_anterior} → {cambiado.fecha}")
+        print(f"   clave: {cambiado.clave_anterior} → {cambiado.clave_acceso}")
+        return 0
+    if args.json:
+        print(json.dumps({**cambiado.a_dict(), "xml": cambiado.xml}, ensure_ascii=False, indent=2))
+        return 0
+    print(cambiado.xml)
+    return 0
 
 
 def cmd_leer(args: argparse.Namespace) -> int:
@@ -352,6 +419,28 @@ def construir_parser() -> argparse.ArgumentParser:
         help="Comprobar únicamente las firmas XAdES-BES",
     )
     p.set_defaults(func=cmd_verificar)
+
+    p = sub.add_parser(
+        "revisar",
+        help="Revisa lo que impide emitir antes de firmar (certificado y datos)",
+    )
+    p.add_argument("archivo", nargs="?", help="XML del comprobante (sin firmar)")
+    p.add_argument("--certificado", help="Archivo .p12 para comprobar vigencia y RUC")
+    p.add_argument("--clave-clave", dest="clave_clave", help="Contraseña del .p12")
+    p.add_argument("--dias-aviso", dest="dias_aviso", type=int, default=DIAS_AVISO_CERTIFICADO,
+                   help="Días de antelación para avisar de que la firma va a vencer")
+    p.add_argument("--fecha", help="Cambia la fecha de emisión antes de revisar (AAAA-MM-DD)")
+    p.set_defaults(func=cmd_revisar)
+
+    p = sub.add_parser(
+        "fecha",
+        help="Cambia la fecha de emisión de un comprobante y recalcula su clave",
+    )
+    p.add_argument("archivo", nargs="?", help="XML del comprobante sin firmar")
+    p.add_argument("--fecha", help="Fecha de emisión (por omisión, la de hoy en Ecuador)")
+    p.add_argument("--salida", help="Archivo donde guardar el XML con la fecha nueva")
+    p.add_argument("--json", action="store_true", help="Muestra el XML y su clave en JSON")
+    p.set_defaults(func=cmd_fecha)
 
     p = sub.add_parser("leer", help="Muestra los datos del comprobante que hay en un XML")
     p.add_argument("archivo", help="XML del comprobante (propio o de un proveedor)")

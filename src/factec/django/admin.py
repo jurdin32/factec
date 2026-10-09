@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, List
 
 from django.contrib import admin, messages
 from django.urls import NoReverseMatch, reverse
 from django.utils.html import format_html, format_html_join
 
-from ..excepciones import ErrorFacturacion
-from . import archivos, conf, models, services, sri_datos
+from ..excepciones import ErrorFacturacion, ErrorRevision
+from . import archivos, avisos, conf, models, services, sri_datos
 from .admin_filtros import (
     AdminConAjustes,
     FiltroConCertificado,
+    FiltroFechaDesactualizada,
     filtro_emitido,
     filtro_por_fecha,
     filtro_por_importe,
@@ -21,6 +23,8 @@ from .admin_documentos import *  # noqa: F401,F403  (registra los comprobantes)
 from .forms import ConfiguracionEmisorForm
 
 __all__ = ["ConfiguracionEmisorAdmin", "ComprobanteEmitidoAdmin", "SecuencialAdmin"]
+
+logger = logging.getLogger(__name__)
 
 
 @admin.register(models.ConfiguracionEmisor)
@@ -96,6 +100,11 @@ class ConfiguracionEmisorAdmin(AdminConAjustes):
     actions = ("accion_probar_firma", "accion_actualizar_desde_sri")
     save_on_top = True
 
+    def changelist_view(self, request: Any, extra_context: Any = None) -> Any:
+        """Avisa en el listado si la firma está vencida o a punto de vencer."""
+        _avisar_de_la_firma(self, request)
+        return super().changelist_view(request, extra_context)
+
     @admin.display(description="Serie")
     def serie(self, obj: models.ConfiguracionEmisor) -> str:
         return obj.serie
@@ -113,12 +122,22 @@ class ConfiguracionEmisorAdmin(AdminConAjustes):
             return format_html('<span style="color:#a51f1f">{}</span>', "sin archivo")
         if not obj.clave_certificado_cifrada:
             return format_html('<span style="color:#a51f1f">{}</span>', "sin contraseña")
-        try:
-            certificado = obj.certificado_obj(validar_vigencia=False)
-        except Exception as exc:  # noqa: BLE001 - el listado nunca debe romperse
-            return format_html('<span style="color:#a51f1f">{}</span>', str(exc)[:60])
-        if certificado.vencido():
-            return format_html('<span style="color:#a51f1f">{}</span>', "vencido")
+
+        revisado = obj.revisar_certificado()
+        if not revisado.cargado:
+            return format_html(
+                '<span style="color:#a51f1f">{}</span>',
+                (revisado.problemas or ["no se pudo abrir"])[0][:70],
+            )
+        if revisado.vencido or not revisado.vigente:
+            return format_html(
+                '<span style="color:#a51f1f">{}</span>', "vencido — no se puede emitir"
+            )
+        if revisado.avisos:
+            return format_html(
+                '<span style="color:#8a6d00">{}</span>',
+                f"vence en {revisado.dias_restantes} día(s)",
+            )
         return format_html('<span style="color:#0a7d33">{}</span>', "válido")
 
     @admin.display(description="Diagnóstico de la firma")
@@ -134,16 +153,33 @@ class ConfiguracionEmisorAdmin(AdminConAjustes):
             return "Adjunte el archivo .p12 y guarde para validarlo."
         if not obj.clave_certificado_cifrada:
             return "Escriba la contraseña del certificado y guarde para validarlo."
-        try:
-            certificado = obj.certificado_obj()
-        except Exception as exc:  # noqa: BLE001 - el admin nunca debe romperse aquí
-            return format_html('<span style="color:#a51f1f">{}</span>', exc)
-        ruta_hasta = getattr(certificado.certificado, "not_valid_after_utc", None) or (
-            certificado.certificado.not_valid_after
-        )
+        revisado = obj.revisar_certificado()
+        if not revisado.cargado:
+            return format_html(
+                '<span style="color:#a51f1f">{}</span>',
+                "; ".join(revisado.problemas) or "No se pudo revisar el certificado.",
+            )
+
+        aviso = ""
+        if revisado.vencido:
+            aviso = format_html(
+                '<br><b style="color:#a51f1f">{}</b>',
+                "VENCIDO: no se puede emitir hasta que renueve la firma.",
+            )
+        elif revisado.avisos:
+            aviso = format_html(
+                '<br><b style="color:#8a6d00">{}</b>',
+                f"Vence en {revisado.dias_restantes} día(s): renuévelo pronto.",
+            )
         return format_html(
-            "<b>Titular:</b> {}<br><b>Emisor:</b> {}<br><b>Válido hasta:</b> {}",
-            certificado.titular, certificado.emisor, ruta_hasta,
+            "<b>Titular:</b> {}<br><b>Emisor:</b> {}<br><b>RUC:</b> {}"
+            "<br><b>Válido hasta:</b> {} ({} día(s)){}",
+            revisado.titular or "—",
+            revisado.emisor or "—",
+            revisado.ruc or "—",
+            revisado.valido_hasta.strftime("%d/%m/%Y") if revisado.valido_hasta else "—",
+            revisado.dias_restantes if revisado.dias_restantes is not None else "—",
+            aviso,
         )
 
     @admin.action(description="Probar la firma del certificado")
@@ -237,6 +273,7 @@ class ComprobanteEmitidoAdmin(AdminConAjustes):
         "configuracion",
         filtro_por_fecha("fecha_emision", "Fecha de emisión"),
         filtro_por_fecha("fecha_autorizacion", "Fecha de autorización"),
+        FiltroFechaDesactualizada,
         filtro_por_fecha("creado", "Alta"),
         filtro_por_importe("importe_total", "Importe"),
     )
@@ -248,8 +285,18 @@ class ComprobanteEmitidoAdmin(AdminConAjustes):
     )
     date_hierarchy = "fecha_emision"
     ordering = ("-creado",)
-    actions = ("accion_emitir", "accion_consultar_autorizacion")
+    actions = (
+        "accion_revisar",
+        "accion_emitir",
+        "accion_actualizar_fecha",
+        "accion_consultar_autorizacion",
+    )
     list_per_page = 50
+
+    def changelist_view(self, request: Any, extra_context: Any = None) -> Any:
+        """Avisa en el listado si la firma impide emitir."""
+        _avisar_de_la_firma(self, request)
+        return super().changelist_view(request, extra_context)
 
     readonly_fields = (
         "clave_acceso", "tipo_comprobante", "ambiente", "tipo_emision",
@@ -416,6 +463,64 @@ class ComprobanteEmitidoAdmin(AdminConAjustes):
             '<strong style="color:{}">{}</strong>', color, obj.get_estado_display()
         )
 
+    @admin.action(description="Revisar antes de emitir (certificado y datos)")
+    def accion_revisar(self, request: Any, queryset: Any) -> None:
+        """Revisa el certificado y el XML: lo que impide emitir y lo que conviene saber.
+
+        No firma, no envía y no gasta secuenciales: sirve para enterarse antes.
+        """
+        correctos = 0
+        for registro in queryset:
+            informe = services.revisar(registro)
+            if informe.puede_emitir:
+                correctos += 1
+                self.message_user(
+                    request, informe.resumen(),
+                    level=messages.WARNING if informe.avisos else messages.SUCCESS,
+                )
+                continue
+            for problema in informe.problemas:
+                self.message_user(
+                    request, f"{registro.clave_acceso}: {problema}", level=messages.ERROR
+                )
+        if correctos:
+            self.message_user(
+                request, f"{correctos} comprobante(s) listos para emitir.",
+                level=messages.SUCCESS,
+            )
+
+    @admin.action(description="Actualizar la fecha de emisión al día de hoy")
+    def accion_actualizar_fecha(self, request: Any, queryset: Any) -> None:
+        """Refecha los comprobantes que quedaron sin enviar de días anteriores.
+
+        La fecha de emisión pasa a ser la del día en que se firma, que es la que
+        admite el SRI, y la clave de acceso se recalcula.
+        """
+        actualizados = 0
+        for registro in queryset:
+            try:
+                anterior = registro.fecha_emision
+                services.actualizar_fecha(registro)
+            except ErrorFacturacion as exc:
+                self.message_user(
+                    request, f"{registro.clave_acceso}: {exc}", level=messages.ERROR
+                )
+                continue
+            if registro.fecha_emision != anterior:
+                actualizados += 1
+                self.message_user(
+                    request,
+                    f"{registro.numero_comprobante}: fecha de emisión del "
+                    f"{anterior:%d/%m/%Y} cambiada al {registro.fecha_emision:%d/%m/%Y} "
+                    f"(clave {registro.clave_acceso}).",
+                    level=messages.SUCCESS,
+                )
+        if not actualizados:
+            self.message_user(
+                request, "No había nada que refechar: ya eran de hoy.",
+                level=messages.WARNING,
+            )
+
     @admin.action(description="Firmar, enviar y esperar autorización (Celery)")
     def accion_emitir(
         self, request: Any, queryset: Any
@@ -428,6 +533,13 @@ class ComprobanteEmitidoAdmin(AdminConAjustes):
                 else:
                     services.procesar(registro)
                     encolados += 1
+            except ErrorRevision as exc:
+                # La revisión previa impidió emitir: se explica el motivo exacto.
+                self.message_user(
+                    request,
+                    f"{registro.clave_acceso}: {exc}",
+                    level=messages.ERROR,
+                )
             except ErrorFacturacion as exc:
                 self.message_user(
                     request, f"{registro.clave_acceso}: {exc}", level=messages.ERROR
@@ -453,6 +565,38 @@ class ComprobanteEmitidoAdmin(AdminConAjustes):
             self.message_user(
                 request, f"{actualizados} comprobante(s) consultados.", level=messages.SUCCESS
             )
+
+
+def _avisar_de_la_firma(admin_: Any, request: Any) -> None:
+    """Deja un aviso en el admin cuando la firma impide emitir o está por vencer.
+
+    Se ejecuta al abrir los listados de configuraciones y de comprobantes: es donde
+    se trabaja, así que es donde hay que enterarse de que hay que renovar la firma.
+    """
+    marcas = getattr(request, "_sri_avisos_de_firma", None)
+    if marcas is None:
+        marcas = set()
+        try:
+            request._sri_avisos_de_firma = marcas  # noqa: SLF001 - una vez por petición
+        except AttributeError:  # pragma: no cover - peticiones de solo lectura
+            return
+
+    try:
+        informe = avisos.revisar_firma(con_pendientes=False)
+    except Exception as exc:  # noqa: BLE001 - el admin nunca debe romperse
+        logger.warning("No se pudo revisar la firma desde el admin: %s", exc)
+        return
+
+    for problema in informe["problemas"]:
+        if problema in marcas:
+            continue
+        marcas.add(problema)
+        admin_.message_user(request, problema, level=messages.ERROR)
+    for aviso in informe["avisos"]:
+        if aviso in marcas:
+            continue
+        marcas.add(aviso)
+        admin_.message_user(request, aviso, level=messages.WARNING)
 
 
 @admin.register(models.Secuencial)

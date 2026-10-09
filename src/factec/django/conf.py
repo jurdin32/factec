@@ -24,11 +24,13 @@ from django.utils.module_loading import import_string
 from ..catalogos import Ambiente, leer_ambiente
 from ..excepciones import ErrorValidacion
 from ..modelos import Emisor
+from ..revision import DIAS_AVISO_CERTIFICADO
 
 __all__ = [
     "AJUSTES_POR_DEFECTO",
     "ajustes",
     "obtener",
+    "planificador",
     "configuracion_activa",
     "emisor",
     "certificado",
@@ -62,6 +64,16 @@ AJUSTES_POR_DEFECTO: Dict[str, Any] = {
     "VALIDAR_VIGENCIA": True,
     "ALGORITMO_FIRMA": "sha1",
     "USAR_BASE_DE_DATOS": True,
+    #: Revisar el certificado y los datos antes de firmar y enviar: si algo
+    #: fallaría en el SRI, no se emite y se informa del motivo.
+    "REVISAR_ANTES_DE_EMITIR": True,
+    #: Días de antelación con los que se avisa de que la firma va a vencer.
+    "DIAS_AVISO_CERTIFICADO": DIAS_AVISO_CERTIFICADO,
+    #: Emitir con la fecha del día en que se firma (el SRI solo admite la fecha
+    #: del día o de los 90 días anteriores).
+    "FECHA_EMISION_AL_EMITIR": True,
+    #: Correos a los que avisar cuando la revisión periódica encuentre problemas.
+    "CORREOS_AVISO": [],
     #: Filtros, búsquedas y columnas que la tienda añade al admin (ver
     #: :mod:`factec.django.admin_filtros`).
     "ADMIN": {},
@@ -248,6 +260,35 @@ def limpiar_cache() -> None:
 def celery_queue() -> Optional[str]:
     """Cola de Celery donde encolar las tareas (``None`` = cola por defecto)."""
     return obtener("CELERY_QUEUE")
+
+
+def planificador(
+    *,
+    cada_certificado: float = 86400.0,
+    cada_pendientes: float = 600.0,
+) -> Dict[str, Any]:
+    """Tareas periódicas de Celery listas para ``CELERY_BEAT_SCHEDULE``.
+
+    Con esto queda **programada** en el paquete la revisión del certificado (una
+    vez al día) y el reintento de los comprobantes que quedaron a medias::
+
+        # settings.py
+        from factec.django.conf import planificador
+
+        CELERY_BEAT_SCHEDULE = {**planificador()}
+
+    Los intervalos se expresan en segundos (por omisión, un día y diez minutos).
+    """
+    return {
+        nombre_tarea("revisar_certificado"): {
+            "task": nombre_tarea("revisar_certificado"),
+            "schedule": cada_certificado,
+        },
+        nombre_tarea("reintentar_pendientes"): {
+            "task": nombre_tarea("reintentar_pendientes"),
+            "schedule": cada_pendientes,
+        },
+    }
 
 
 def nombre_tarea(clave: str) -> str:

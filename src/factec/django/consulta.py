@@ -36,6 +36,7 @@ __all__ = [
     "datos",
     "datos_por_clave",
     "leer",
+    "revisar",
     "verificar",
     "verificar_en_el_sri",
     "verificar_xml",
@@ -88,6 +89,26 @@ def leer(
     """Lee el comprobante y devuelve sus datos ya separados."""
     registro = _registro(objeto)
     return leer_comprobante(xml or xml_de(registro))
+
+
+def revisar(
+    objeto: Union[str, int, models.ComprobanteEmitido],
+    **opciones: Any,
+) -> Any:
+    """Revisa el comprobante **antes** de firmarlo y enviarlo.
+
+    Devuelve un :class:`factec.revision.InformeRevision` con ``problemas`` (lo que
+    impediría emitir: certificado vencido, fecha fuera del rango del SRI, totales
+    que no cuadran…) y ``avisos`` (por ejemplo, que la firma vence en pocos días).
+    No contacta con el SRI ni consume secuenciales::
+
+        informe = consulta.revisar(registro)
+        if not informe.puede_emitir:
+            return JsonResponse({"problemas": informe.problemas}, status=400)
+    """
+    from . import services
+
+    return services.revisar(_registro(objeto), **opciones)
 
 
 def verificar_xml(xml: Union[str, bytes], *, exigir_firma: bool = True) -> InformeVerificacion:
@@ -198,6 +219,7 @@ def datos(
         "mensajes": list(registro.mensajes or []),
         "error": registro.error,
         "carpeta": registro.carpeta,
+        "fecha_desactualizada": registro.fecha_desactualizada,
         "archivos": [
             {"nombre": archivo["nombre"], "relativa": archivo["relativa"], "bytes": archivo["bytes"]}
             for archivo in archivos.archivos_del_registro(registro)

@@ -442,12 +442,120 @@ completarlo:
 | `sri_fe.W003` | Aviso | Falta la contraseña del certificado |
 | `sri_fe.E004` | Error | La contraseña cifrada no se puede descifrar (falta `SRI_CLAVE_CIFRADO`) |
 | `sri_fe.E005` | Error | El certificado no se abre (contraseña incorrecta o archivo dañado) |
-| `sri_fe.W006` | Aviso | El certificado está vencido |
+| `sri_fe.E006` | Error | El certificado está vencido (no se puede emitir nada con él) |
 | `sri_fe.E007` | Error | El RUC del certificado no coincide con el del emisor |
 | `sri_fe.W008` | Aviso | La base de datos no está al día: ejecute `python manage.py migrate --skip-checks` |
+| `sri_fe.E009` | Error | Hay configuraciones del emisor, pero ninguna activa |
+| `sri_fe.W010` | Aviso | El certificado vence en pocos días (`DIAS_AVISO_CERTIFICADO`) |
 
 Son avisos para no impedir el arranque: primero se levanta el servidor y se
-rellena la configuración en el admin.
+rellena la configuración en el admin. **Un certificado vencido sí es un error**:
+con él el SRI devuelve todo lo que se emita.
+
+### Revisar antes de emitir (certificado y datos)
+
+Antes de firmar y enviar se revisa lo que haría que el SRI devolviera el
+comprobante: el certificado (abrible, vigente y del mismo RUC) y los datos (fecha
+de emisión, totales y clave de acceso). Si algo falla **no se emite**: se explica
+el motivo y no se gasta secuencial.
+
+| Punto | Dónde se ve |
+|---|---|
+| Aviso en los listados del admin | Al abrir **Comprobantes emitidos** o **Configuraciones del emisor**, si la firma impide emitir (o está por vencer) |
+| Acción **«Revisar antes de emitir (certificado y datos)»** | Sobre los comprobantes seleccionados: informa sin firmar ni enviar |
+| Columna **«Firma»** | `válido`, `vence en N día(s)`, `vencido — no se puede emitir` |
+| `manage.py check` | Al arrancar (ver los avisos de arriba) |
+| `manage.py revisar_firma` | A mano o programado (ver más abajo) |
+
+```python
+from factec.django import services
+
+informe = services.revisar_comprobante(comprobante)   # antes de registrarlo
+informe = services.revisar(registro)                  # el ya guardado (su XML)
+informe = registro.revisar()                          # lo mismo, desde el modelo
+informe = consulta.revisar(registro)                  # lo mismo, desde una vista
+
+informe.puede_emitir, informe.problemas, informe.avisos
+informe.certificado.dias_restantes, informe.certificado.ruc
+informe.a_dict()
+```
+
+`facturacion.emitir()` hace esa revisión por su cuenta (`REVISAR_ANTES_DE_EMITIR`) y
+lanza `ErrorRevision` —con el informe dentro— en lugar de emitir algo que va a
+volver mal:
+
+```python
+from factec.django import facturacion
+from factec.excepciones import ErrorRevision
+
+try:
+    registro = facturacion.emitir(mi_factura)
+except ErrorRevision as error:
+    return JsonResponse({"problemas": error.informe.problemas}, status=400)
+
+facturacion.emitir(mi_factura, revisar=False)          # omitir la revisión
+```
+
+En la emisión por tareas (Celery o `services.procesar`) el comprobante no se envía
+y queda en `ERROR` con el motivo (también en `error.txt`), listo para reintentar
+cuando se arregle.
+
+#### La fecha de emisión: la del día en que se firma
+
+El SRI valida la fecha de emisión contra su propio reloj, así que un comprobante se
+firma **el día en que se emite**: con `FECHA_EMISION_AL_EMITIR` (activo por
+omisión) la fecha del comprobante es la de hoy en Ecuador, no la del documento. Un
+borrador que quedó de otro día se **refecha** antes de firmarlo (nueva fecha, nueva
+clave de acceso) en vez de reenviarse con la fecha vieja.
+
+```python
+import facturacion
+
+# La fecha del documento se respeta (dentro de la ventana del SRI)
+facturacion.emitir(mi_factura, fecha_emision=date(2026, 10, 1))
+
+# Refechar un comprobante ya guardado (antes de firmarlo)
+services.actualizar_fecha(registro)          # a hoy; devuelve el registro actualizado
+registro.fecha_desactualizada                # True si quedó sin enviar de otro día
+```
+
+Como la fecha la pone la firma, un documento con una fecha mal puesta (futura o
+de hace meses) no inutiliza el comprobante: se emite con la de hoy, que es la que el
+SRI acepta.
+
+Solo se puede refechar un comprobante **que no se haya enviado** (`intentos == 0`):
+una vez que el SRI lo recibió, la clave está registrada allí. En el admin está la
+acción **«Actualizar la fecha de emisión al día de hoy»**, el filtro **«Sin enviar,
+de otro día (hay que refechar)»**, y `FECHA_EMISION_AL_EMITIR = False` desactiva el
+comportamiento (cada emisión usa la fecha del documento).
+
+#### Que el aviso llegue antes: la revisión programada
+
+```bash
+python manage.py revisar_firma            # ¿se puede emitir? (código 1 si no)
+python manage.py revisar_firma --correo   # además, avisa a CORREOS_AVISO
+python manage.py revisar_firma --sin-pendientes --dias 15
+```
+
+```python
+# settings.py — con Celery Beat, programada desde el propio paquete
+from factec.django.conf import planificador
+
+CELERY_BEAT_SCHEDULE = {**planificador()}     # revisa la firma a diario (86400 s)
+                                              # y reintenta los pendientes (600 s)
+
+FACTURACION_ELECTRONICA = {
+    "CORREOS_AVISO": ["administracion@mitienda.ec"],   # si no, se usan los ADMINS
+    "DIAS_AVISO_CERTIFICADO": 30,
+}
+```
+
+La tarea `sri_fe.revisar_certificado` envía el informe por correo y lo deja en el
+log. Sin Celery, programe el comando en el cron:
+
+```bash
+0 7 * * * cd /ruta/del/proyecto && ./venv/bin/python manage.py revisar_firma --correo
+```
 
 ### Archivos del comprobante
 
@@ -515,7 +623,7 @@ columnas y campos de solo lectura que indique.
 | `RetencionDocSustento` | Documento y código de sustento, pago local/exterior, convenio de doble tributación, rango de fechas e importes | Números de documento y autorización, sujeto retenido, retenciones e impuestos |
 | `Cliente` | Tipo de identificación, fecha de alta | Razón social, identificación, correo, teléfono, dirección |
 | `Producto` | Activo, IVA, unidad de medida, fecha de alta | Código principal y auxiliar, descripción, unidad |
-| `ComprobanteEmitido` | Estado, tipo, ambiente, tipo de emisión, configuración, rangos de fechas e importes | Clave, autorización, receptor, secuencial, carpeta, mensajes y error |
+| `ComprobanteEmitido` | Estado, tipo, ambiente, tipo de emisión, configuración, rangos de fechas e importes, **sin enviar de otro día** | Clave, autorización, receptor, secuencial, carpeta, mensajes y error |
 | `ConfiguracionEmisor` | Activo, ambiente, obligado a contabilidad, régimen, categoría, firma cargada, fecha de alta | RUC, razón social, direcciones, serie, certificado, resoluciones |
 | **Líneas** (`FacturaDetalle`, `LiquidacionCompraDetalle`, `NotaCreditoDetalle`, `GuiaDetalle`) | Fecha y estado del comprobante, IVA, importe, tipo de identificación de la contraparte | Descripción, códigos, datos adicionales, producto, cliente/proveedor, secuencial y clave del comprobante |
 | `RetencionImpuesto`, `RetencionDocSustentoImpuesto`, `NotaDebitoMotivo` | Código y porcentaje, estado y fecha de la nota | Códigos de retención, base, documento sustento, sujeto retenido |
@@ -886,9 +994,13 @@ __all__ = ("celery_app",)
 
 ```python
 # settings.py
+from factec.django.conf import planificador
+
 CELERY_BROKER_URL = "redis://localhost:6379/0"
 CELERY_BEAT_SCHEDULE = {
-    "sri-reintentar-pendientes": {
+    **planificador(),                                   # la firma, a diario;
+                                                        # los pendientes, cada 10 min
+    "sri-reintentar-pendientes": {                      # o a mano, con su horario
         "task": "sri_fe.reintentar_pendientes",
         "schedule": crontab(minute="*/10"),
     },
@@ -900,13 +1012,14 @@ CELERY_BEAT_SCHEDULE = {
 | `sri_fe.emitir_comprobante` | Firma, envía y espera la autorización |
 | `sri_fe.consultar_autorizacion` | Consulta el estado de un comprobante ya recibido |
 | `sri_fe.reintentar_pendientes` | Recupera los que no llegaron a estado final |
+| `sri_fe.revisar_certificado` | Revisa la firma electrónica y avisa antes de que falle una emisión |
 
 ```bash
 celery -A mi_proyecto worker -l info
-celery -A mi_proyecto beat -l info     # opcional, para los reintentos
+celery -A mi_proyecto beat -l info     # opcional, para la revisión y los reintentos
 ```
 
-Las tres tareas quedan registradas solas porque `factec.django` está en
+Las cuatro tareas quedan registradas solas porque `factec.django` está en
 `INSTALLED_APPS` y `autodiscover_tasks()` importa su `tasks`. Si arranca el worker
 y ve `Received unregistered task of type 'sri_fe.emitir_comprobante'`, es que
 falta el `celery.py` de arriba (o el `app.autodiscover_tasks()`).
@@ -933,7 +1046,7 @@ BORRADOR ──firmar──► FIRMADO ──enviar──► RECIBIDO ──auto
 | `EN_PROCESO` | El SRI aún no lo autoriza |
 | `AUTORIZADO` | Autorizado; `xml_autorizado` es el documento con validez legal |
 | `NO_AUTORIZADO` | Rechazado en la autorización |
-| `ERROR` | Fallo de comunicación; se puede reintentar |
+| `ERROR` | Fallo de comunicación o la revisión previa no pasó (el motivo queda en `error`); se puede reintentar |
 
 Los mensajes del SRI se guardan en `mensajes` (JSON) y el último fallo en `error`.
 
@@ -954,6 +1067,10 @@ FACTURACION_ELECTRONICA = {
     "EMITIR_CON_CELERY": True,         # emitir() encola; False = síncrono
     "VALIDAR_VIGENCIA": True,
     "ALGORITMO_FIRMA": "sha1",
+    "REVISAR_ANTES_DE_EMITIR": True,  # revisa certificado y datos antes de firmar
+    "DIAS_AVISO_CERTIFICADO": 30,     # antelación con la que se avisa del vencimiento
+    "FECHA_EMISION_AL_EMITIR": True,  # emitir con la fecha del día de la firma
+    "CORREOS_AVISO": [],              # a quién avisar de los problemas de la firma
 }
 ```
 

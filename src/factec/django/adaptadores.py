@@ -262,10 +262,11 @@ class AdaptadorComprobante:
     comprobante_clase: Type[Comprobante] = Factura
 
     def __init__(self, configuracion: Any = None, emisor: Any = None,
-                 ambiente: Any = None) -> None:
+                 ambiente: Any = None, fecha_emision: Any = None) -> None:
         self.configuracion = configuracion
         self._emisor = emisor
         self._ambiente = ambiente
+        self._fecha_emision = fecha_emision
 
     # ------------------------------------------------------ datos comunes
 
@@ -311,7 +312,18 @@ class AdaptadorComprobante:
         return conf.ambiente()
 
     def fecha_emision(self, obj: Any) -> date:
-        return _fecha(_obtener(obj, NOMBRES_FECHA)) or date.today()
+        """Fecha de emisión del comprobante: la del documento.
+
+        El adaptador solo traduce: la fecha con la que se **emite** la decide el
+        flujo de emisión (ver ``FECHA_EMISION_AL_EMITIR`` en
+        :func:`factec.django.facturacion.emitir`). Si el objeto no declara ninguna
+        fecha se usa la de hoy en Ecuador, que es el reloj del SRI.
+        """
+        from ..sri import fechas
+
+        if self._fecha_emision is not None:
+            return _fecha(self._fecha_emision) or fechas.hoy_en_ecuador()
+        return _fecha(_obtener(obj, NOMBRES_FECHA)) or fechas.hoy_en_ecuador()
 
     def secuencial(self, obj: Any) -> Optional[str]:
         """Secuencial del comprobante; ``None`` para que se reserve uno."""

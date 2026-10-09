@@ -93,7 +93,7 @@ Errores frecuentes en pruebas:
 
 | Mensaje del SRI | Qué significa |
 |---|---|
-| `FECHA EMISIÓN EXTEMPORANEA` (65) | La fecha de emisión es futura o de más de 90 días. El paquete ya lo valida: revise `TIME_ZONE` (debe ser `America/Guayaquil`) y la fecha del comprobante |
+| `FECHA EMISIÓN EXTEMPORANEA` (65) | La fecha de emisión es futura o de más de 90 días. El paquete ya lo valida y, además, emite siempre con la fecha del día en que se firma, así que no depende de la fecha del documento: revise `TIME_ZONE` (debe ser `America/Guayaquil`) |
 | `CLAVE ACCESO REGISTRADA` | Esa clave ya se envió: el paquete es idempotente por documento, no lo reenvía |
 | `ARCHIVO NO CUMPLE ESTRUCTURA XML` (35) | El XML no cuadra con el XSD: revise los catálogos del SRI que usó |
 | `FIRMA INVÁLIDA` | El certificado no es RSA, la contraseña es incorrecta o el XML se modificó después de firmarlo |

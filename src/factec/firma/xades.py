@@ -185,6 +185,23 @@ class Certificado:
             <= _fecha_certificado(self.certificado, "not_valid_after")
         )
 
+    @property
+    def valido_desde(self) -> datetime:
+        """Momento desde el que el certificado es válido."""
+        return _fecha_certificado(self.certificado, "not_valid_before")
+
+    @property
+    def valido_hasta(self) -> datetime:
+        """Momento en el que el certificado deja de ser válido."""
+        return _fecha_certificado(self.certificado, "not_valid_after")
+
+    def dias_restantes(self, momento: Optional[datetime] = None) -> int:
+        """Días que le quedan al certificado (negativos si ya venció)."""
+        momento = momento or datetime.now(timezone.utc)
+        if momento.tzinfo is None:
+            momento = momento.replace(tzinfo=timezone.utc)
+        return (self.valido_hasta.date() - momento.date()).days
+
     def validar_vigencia(self, momento: Optional[datetime] = None) -> None:
         """Lanza :class:`ErrorCertificado` si el certificado no está vigente."""
         if self.vencido(momento):
@@ -241,6 +258,13 @@ class CertificadoPublico:
     def vencido(self, momento: Optional[datetime] = None) -> bool:
         momento = momento or datetime.now(timezone.utc)
         return not (self.valido_desde <= momento <= self.valido_hasta)
+
+    def dias_restantes(self, momento: Optional[datetime] = None) -> int:
+        """Días que le quedan al certificado (negativos si ya venció)."""
+        momento = momento or datetime.now(timezone.utc)
+        if momento.tzinfo is None:
+            momento = momento.replace(tzinfo=timezone.utc)
+        return (self.valido_hasta.date() - momento.date()).days
 
     @property
     def der(self) -> bytes:

@@ -17,6 +17,7 @@ from typing import Any, List
 from django.core.checks import Error, Warning, register
 
 from ..excepciones import ErrorFacturacion
+from ..revision import DIAS_AVISO_CERTIFICADO, revisar_certificado
 from . import conf
 
 __all__ = ["comprobar_configuracion"]
@@ -28,7 +29,8 @@ ID_CERTIFICADO_FALTA = "sri_fe.W002"
 ID_CLAVE_FALTA = "sri_fe.W003"
 ID_CLAVE_CIFRADO = "sri_fe.E004"
 ID_CERTIFICADO_INVALIDO = "sri_fe.E005"
-ID_VIGENCIA = "sri_fe.W006"
+ID_VIGENCIA = "sri_fe.E006"
+ID_VIGENCIA_AVISO = "sri_fe.W010"
 ID_RUC = "sri_fe.E007"
 ID_TABLAS = "sri_fe.W008"
 ID_ACTIVA = "sri_fe.E009"
@@ -202,9 +204,13 @@ def _comprobar_desde_ajustes(configuracion: dict, problemas: List[Any]) -> List[
 
 
 def _comprobar_certificado(activa: Any, problemas: List[Any]) -> None:
-    """Abre el certificado y comprueba vigencia y titular."""
+    """Abre el certificado y comprueba vigencia, titular y RUC.
+
+    Un certificado vencido es un ``Error`` (no un aviso): con él no se puede emitir
+    nada, el SRI devuelve los comprobantes.
+    """
     try:
-        certificado = activa.certificado_obj()
+        certificado = activa.certificado_obj(validar_vigencia=False)
     except ErrorFacturacion as exc:
         problemas.append(
             Error(
@@ -227,23 +233,38 @@ def _comprobar_certificado(activa: Any, problemas: List[Any]) -> None:
         )
         return
 
-    if certificado.vencido():
-        problemas.append(
-            Warning(
-                f"El certificado de «{activa}» está vencido o aún no es válido.",
-                hint="Renueve su firma electrónica y vuelva a cargarla en el admin.",
-                id=ID_VIGENCIA,
+    revisado = revisar_certificado(
+        certificado,
+        emisor=activa.a_emisor(),
+        dias_aviso=int(conf.obtener("DIAS_AVISO_CERTIFICADO", DIAS_AVISO_CERTIFICADO)),
+    )
+
+    if not revisado.vigente:
+        for texto in revisado.problemas or [
+            "El certificado está vencido o aún no es válido."
+        ]:
+            problemas.append(
+                Error(
+                    f"«{activa}»: {texto}",
+                    hint=(
+                        "Mientras el certificado no sea válido no se puede emitir: "
+                        "renueve su firma electrónica y vuelva a cargarla en el admin. "
+                        f"{AYUDA_ADMIN}"
+                    ),
+                    id=ID_VIGENCIA,
+                )
             )
+        return
+
+    for texto in revisado.avisos:
+        problemas.append(
+            Warning(f"«{activa}»: {texto}", hint=AYUDA_ADMIN, id=ID_VIGENCIA_AVISO)
         )
 
-    try:
-        ruc_cert = activa.ruc_del_certificado()
-    except Exception:  # noqa: BLE001 - la extracción es informativa
-        ruc_cert = None
-    if ruc_cert and activa.ruc and ruc_cert != activa.ruc:
+    if revisado.ruc and activa.ruc and revisado.ruc != activa.ruc:
         problemas.append(
             Error(
-                f"El RUC del certificado ({ruc_cert}) no coincide con el RUC del emisor "
+                f"El RUC del certificado ({revisado.ruc}) no coincide con el RUC del emisor "
                 f"({activa.ruc}).",
                 hint=(
                     "El SRI rechaza los comprobantes firmados por otro contribuyente. "

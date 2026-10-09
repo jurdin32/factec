@@ -4,15 +4,23 @@ Las tareas se registran con nombre fijo (``sri_fe.emitir_comprobante`` y
 ``sri_fe.consultar_autorizacion``) para que ``services.encolar()`` pueda
 enviarlas con ``send_task`` sin importar la instancia de Celery del proyecto.
 
-Con un ``CELERY_BEAT_SCHEDULE`` se puede añadir ``reintentar_pendientes`` para
-recuperar los comprobantes que quedaron en proceso o con error::
+Las dos tareas periódicas del paquete se programan de una vez con
+:func:`factec.django.conf.planificador`:
 
-    CELERY_BEAT_SCHEDULE = {
-        "sri-reintentar-pendientes": {
-            "task": "sri_fe.reintentar_pendientes",
-            "schedule": crontab(minute="*/10"),
-        },
-    }
+* ``revisar_certificado`` — revisa la firma electrónica una vez al día y avisa por
+  correo (y en el log) cuando está vencida o a punto de vencer, **antes** de que
+  falle una emisión.
+* ``reintentar_pendientes`` — recupera los comprobantes que quedaron en proceso o
+  con error.
+
+::
+
+    # settings.py
+    from factec.django.conf import planificador
+
+    CELERY_BEAT_SCHEDULE = {**planificador()}
+
+También se puede llamar a mano:``python manage.py revisar_firma``.
 """
 
 from __future__ import annotations
@@ -22,7 +30,7 @@ from typing import Any, Dict, List, Optional
 
 from celery import shared_task
 
-from . import conf, models, services
+from . import avisos, conf, models, services
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +38,17 @@ __all__ = [
     "NOMBRE_EMITIR_COMPROBANTE",
     "NOMBRE_CONSULTAR_AUTORIZACION",
     "NOMBRE_REINTENTAR_PENDIENTES",
+    "NOMBRE_REVISAR_CERTIFICADO",
     "emitir_comprobante",
     "consultar_autorizacion",
     "reintentar_pendientes",
+    "revisar_certificado",
 ]
 
 NOMBRE_EMITIR_COMPROBANTE = conf.nombre_tarea("emitir_comprobante")
 NOMBRE_CONSULTAR_AUTORIZACION = conf.nombre_tarea("consultar_autorizacion")
 NOMBRE_REINTENTAR_PENDIENTES = conf.nombre_tarea("reintentar_pendientes")
+NOMBRE_REVISAR_CERTIFICADO = conf.nombre_tarea("revisar_certificado")
 
 #: Estados que se recuperan con la tarea periódica.
 ESTADOS_A_RECUPERAR = (
@@ -100,6 +111,20 @@ def consultar_autorizacion(comprobante_id: int) -> Optional[Dict[str, Any]]:
     services.autorizar(registro)
     registro.refresh_from_db()
     return _resumen(registro)
+
+
+@shared_task(name=NOMBRE_REVISAR_CERTIFICADO)
+def revisar_certificado(avisar_por_correo: bool = True) -> Dict[str, Any]:
+    """Revisa la firma electrónica y avisa si hay problemas (tarea periódica).
+
+    Se programa con ``conf.planificador()`` (una vez al día) para que el aviso
+    llegue **antes** de que una emisión falle: si el certificado está vencido o a
+    punto de vencer, se envía un correo y se deja constancia en el log.
+    """
+    informe = avisos.revisar_firma()
+    if avisar_por_correo and informe["problemas"]:
+        avisos.avisar_por_correo(informe)
+    return informe
 
 
 @shared_task(name=NOMBRE_REINTENTAR_PENDIENTES)

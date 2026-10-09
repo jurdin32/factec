@@ -46,7 +46,7 @@ from ..catalogos import (
 from ..comprobantes import calcular_totales
 from ..excepciones import ErrorValidacion
 from ..modelos import Detalle, Impuesto, cuantizar
-from ..sri.fechas import validar_fecha_emision
+from ..sri import fechas
 from .campos_adicionales import (
     MAXIMO_CAMPOS_ADICIONALES,
     MAXIMO_DATOS_ADICIONALES,
@@ -346,7 +346,7 @@ class DocumentoElectronico(models.Model):
         # (por ejemplo las observaciones) sin que moleste la fecha.
         if self.fecha_emision and not self.ya_autorizado():
             try:
-                validar_fecha_emision(self.fecha_emision)
+                fechas.validar_fecha_emision(self.fecha_emision)
             except ErrorValidacion as error:
                 raise ValidationError({"fecha_emision": str(error)}) from error
 

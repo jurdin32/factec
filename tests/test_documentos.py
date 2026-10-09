@@ -16,7 +16,7 @@ from lxml import etree
 
 from django.contrib import admin as _admin
 
-from conftest import RUC, _receptor, _superusuario
+from conftest import CLAVE_CERTIFICADO, RUC, _crear_p12, _receptor, _superusuario
 
 HOY = date(2026, 10, 8)
 
@@ -1167,17 +1167,42 @@ def test_un_comprobante_autorizado_se_puede_seguir_editando(
 
 
 def test_un_comprobante_no_se_puede_emitir_con_fecha_futura(documentos, factura):
-    """Ni siquiera por la puerta de atrás: el XML se niega a construirse."""
+    """Ni siquiera pidiendo la fecha a mano: el XML se niega a construirse."""
     from datetime import timedelta
 
     from factec.excepciones import ErrorValidacion
     from factec.sri.fechas import hoy_en_ecuador
 
-    factura.fecha_emision = hoy_en_ecuador() + timedelta(days=1)
+    manana = hoy_en_ecuador() + timedelta(days=1)
+    factura.fecha_emision = manana
     factura.save()
 
     with pytest.raises(ErrorValidacion, match="FECHA EMISIÓN EXTEMPORANEA"):
-        factura.emitir(encolar=False)
+        factura.emitir(encolar=False, fecha_emision=manana)
+
+
+def test_el_documento_con_fecha_futura_se_emite_con_la_fecha_de_hoy(
+    documentos, factura, cliente_falso
+):
+    """Al emitir manda el día de la firma: la fecha del documento no se envía tal cual.
+
+    Un documento con la fecha mal puesta (por ejemplo, guardado con la zona horaria
+    en UTC) no deja el comprobante inutilizable: se emite con la fecha de hoy y el
+    SRI lo acepta.
+    """
+    from datetime import timedelta
+
+    from factec.sri import fechas
+
+    hoy = fechas.hoy_en_ecuador()
+    factura.fecha_emision = hoy + timedelta(days=1)
+    factura.save()
+
+    registro = factura.emitir(encolar=False)
+
+    assert registro.fecha_emision == hoy
+    assert f"<fechaEmision>{hoy:%d/%m/%Y}</fechaEmision>" in registro.xml_sin_firma
+    assert registro.autorizado
 
 
 def test_corregir_un_comprobante_devuelto_lo_rehace(documentos, factura, cliente_falso):
@@ -1194,7 +1219,8 @@ def test_corregir_un_comprobante_devuelto_lo_rehace(documentos, factura, cliente
     hoy = hoy_en_ecuador()
     ayer = hoy - timedelta(days=1)
 
-    # 1) Se emite y el SRI lo devuelve (por ejemplo, por estructura).
+    # 1) Se emite y el SRI lo devuelve (por ejemplo, por estructura). El
+    #    comprobante se firma con la fecha del día, no con la del documento.
     factura.fecha_emision = ayer
     factura.save()
 
@@ -1202,7 +1228,8 @@ def test_corregir_un_comprobante_devuelto_lo_rehace(documentos, factura, cliente
     primero = factura.emitir(encolar=False)
 
     assert primero.estado == models.EstadoComprobante.DEVUELTO
-    assert f"<fechaEmision>{ayer:%d/%m/%Y}</fechaEmision>" in primero.xml_sin_firma
+    assert primero.fecha_emision == hoy
+    assert f"<fechaEmision>{hoy:%d/%m/%Y}</fechaEmision>" in primero.xml_sin_firma
     secuenciales = models.Secuencial.objects.count()
 
     # 2) Se corrige la fecha y se vuelve a emitir.
@@ -1796,3 +1823,311 @@ def test_una_ruta_mala_en_los_ajustes_no_rompe_el_admin(entorno_django, caplog):
         filtros = admin_producto.get_list_filter(None)
 
     assert "activo" in filtros          # siguen los del paquete
+
+
+# --------------------- revisión previa: certificado y fecha de emisión
+
+
+def _con_certificado_de_otro_ruc():
+    """Deja la configuración activa con un certificado de otro contribuyente."""
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    from factec.django import conf
+
+    configuracion = conf.configuracion_activa()
+    configuracion.certificado = SimpleUploadedFile("otro.p12", _crear_p12("1790012345001"))
+    configuracion.establecer_clave(CLAVE_CERTIFICADO)
+    configuracion.save()
+    conf.limpiar_cache()
+    return configuracion
+
+
+def test_no_se_emite_con_un_certificado_de_otro_contribuyente(
+    documentos, factura, cliente_falso, configuracion
+):
+    """Antes de firmar se revisa: el certificado ajeno no llega ni a firmarse.
+
+    El SRI rechaza los comprobantes firmados por otro contribuyente, así que no se
+    envía nada, no se gasta secuencial y el motivo se explica en el error.
+    """
+    from factec.django import models
+    from factec.excepciones import ErrorRevision
+
+    _con_certificado_de_otro_ruc()
+
+    with pytest.raises(ErrorRevision) as error:
+        factura.emitir(encolar=False)
+
+    assert "no coincide con el del emisor" in str(error.value)
+    assert error.value.informe.puede_emitir is False
+    assert cliente_falso.llamadas == []                      # no se envió nada
+    assert models.ComprobanteEmitido.objects.count() == 0    # ni se consumió secuencial
+
+
+def test_la_revision_se_puede_consultar_sin_emitir(documentos, factura, configuracion):
+    """Sirve para avisar en una vista: se revisa y se decide si emitir."""
+    from factec.django import facturacion, services
+
+    informe = services.revisar_comprobante(facturacion.comprobante_de(factura))
+
+    assert informe.puede_emitir is True
+    assert informe.certificado.ruc == RUC
+    assert informe.a_dict()["certificado"]["ok"] is True
+    assert informe.fecha_de_hoy is not None
+
+
+def test_se_puede_revisar_un_comprobante_guardado(documentos, factura, cliente_falso):
+    from factec.django import consulta
+
+    registro = factura.emitir(encolar=False)
+
+    informe = registro.revisar()
+    assert informe.puede_emitir is True
+    assert informe.clave_acceso == registro.clave_acceso
+    assert informe.totales_cuadran is True
+    assert consulta.revisar(registro.pk).a_dict()["puede_emitir"] is True
+
+
+def test_la_revision_avisa_cuando_la_firma_esta_por_vencer(
+    documentos, factura, cliente_falso, configuracion
+):
+    """Aviso, no error: todavía se puede emitir, pero hay que renovar la firma."""
+    from factec.django import services
+
+    registro = factura.emitir(encolar=False)
+
+    informe = services.revisar(registro, dias_aviso=365 * 10)
+
+    assert informe.puede_emitir is True
+    assert any("vence" in aviso for aviso in informe.avisos)
+
+
+def test_un_comprobante_sin_enviar_de_otro_dia_se_refecha_al_emitir(
+    documentos, factura, cliente_falso, configuracion
+):
+    """El comprobante se firma **el día en que se emite**, no el día del borrador.
+
+    Es el caso real: el certificado estuvo vencido unos días y el borrador se quedó
+    con la fecha vieja; al arreglarlo, se emite con la fecha de hoy y sin duplicar
+    el comprobante ni gastar un secuencial nuevo.
+    """
+    from datetime import timedelta
+
+    from factec.django import facturacion, services
+    from factec.sri import fechas
+
+    hoy = fechas.hoy_en_ecuador()
+    hace_dias = hoy - timedelta(days=3)
+
+    factura.secuencial = int(services.siguiente_secuencial())
+    factura.save()
+    registro = services.registrar(
+        facturacion.comprobante_de(factura, fecha_emision=hace_dias)
+    )
+    registro.vincular(factura)
+    clave_vieja = registro.clave_acceso
+    assert registro.fecha_desactualizada is True
+    assert f"<fechaEmision>{hace_dias:%d/%m/%Y}</fechaEmision>" in registro.xml_sin_firma
+
+    emitido = factura.emitir(encolar=False)
+    emitido.refresh_from_db()
+
+    assert emitido.pk == registro.pk                                   # no se duplica
+    assert emitido.fecha_emision == hoy
+    assert emitido.clave_acceso != clave_vieja                         # la clave lleva la fecha
+    assert f"<fechaEmision>{hoy:%d/%m/%Y}</fechaEmision>" in emitido.xml_sin_firma
+    assert emitido.autorizado
+    assert emitido.fecha_desactualizada is False
+
+
+def test_actualizar_la_fecha_a_mano_deja_el_comprobante_como_borrador(
+    documentos, factura, configuracion
+):
+    from datetime import timedelta
+
+    from factec.django import facturacion, models, services
+    from factec.sri import fechas
+
+    hoy = fechas.hoy_en_ecuador()
+    registro = services.registrar(
+        facturacion.comprobante_de(factura, fecha_emision=hoy - timedelta(days=2))
+    )
+    services.firmar(registro, revisar=False)
+    assert registro.xml_firmado
+
+    services.actualizar_fecha(registro)
+
+    assert registro.fecha_emision == hoy
+    assert registro.estado == models.EstadoComprobante.BORRADOR
+    assert registro.xml_firmado == ""                    # la firma vieja ya no vale
+    assert f"<fechaEmision>{hoy:%d/%m/%Y}</fechaEmision>" in registro.xml_sin_firma
+    assert registro.fecha_desactualizada is False
+    assert registro.archivos()                           # el XML queda archivado
+
+
+def test_no_se_puede_cambiar_la_fecha_de_un_comprobante_ya_enviado(
+    documentos, factura, cliente_falso, configuracion
+):
+    """Una vez en el SRI, la clave está registrada allí: no se puede cambiar."""
+    from factec.django import services
+    from factec.excepciones import ErrorFacturacion
+
+    registro = factura.emitir(encolar=False)
+    assert registro.intentos == 1
+
+    with pytest.raises(ErrorFacturacion, match="ya se envió"):
+        services.actualizar_fecha(registro)
+
+
+def test_se_puede_respetar_la_fecha_del_documento(documentos, factura, cliente_falso, configuracion):
+    """Con ``FECHA_EMISION_AL_EMITIR = False`` manda la fecha del documento."""
+    from django.test import override_settings
+
+    from factec.django import conf
+
+    conf.limpiar_cache()
+    ajustes = {"CLAVE_CIFRADO": "x" * 44, "FECHA_EMISION_AL_EMITIR": False}
+
+    with override_settings(FACTURACION_ELECTRONICA=ajustes):
+        registro = factura.emitir(encolar=False)
+
+    assert registro.fecha_emision == HOY
+    assert f"<fechaEmision>{HOY:%d/%m/%Y}</fechaEmision>" in registro.xml_sin_firma
+
+
+def test_el_admin_revisa_antes_de_emitir(documentos, factura, cliente_falso, admin_cliente,
+                                        configuracion):
+    """La acción del admin informa del motivo en lugar de emitir a ciegas."""
+    from factec.django import conf, models
+
+    _con_certificado_de_otro_ruc()
+    registro = models.ComprobanteEmitido.objects.create(
+        clave_acceso="0" * 49, secuencial="1", fecha_emision=HOY,
+        xml_sin_firma=conf.configuracion_activa() and "<factura/>",
+    )
+
+    respuesta = admin_cliente.post(
+        "/admin/sri_fe/comprobanteemitido/",
+        {"action": "accion_revisar", "_selected_action": [registro.pk]},
+        follow=True,
+    )
+    contenido = respuesta.content.decode()
+
+    assert "El RUC del certificado" in contenido
+    assert registro.estado == models.EstadoComprobante.BORRADOR   # no se emitió
+
+
+def test_el_admin_puede_refechar_los_comprobantes(documentos, factura, cliente_falso,
+                                                 admin_cliente, configuracion):
+    from datetime import timedelta
+
+    from factec.django import facturacion, models, services
+    from factec.sri import fechas
+
+    hoy = fechas.hoy_en_ecuador()
+    registro = services.registrar(
+        facturacion.comprobante_de(factura, fecha_emision=hoy - timedelta(days=4))
+    )
+
+    respuesta = admin_cliente.post(
+        "/admin/sri_fe/comprobanteemitido/",
+        {"action": "accion_actualizar_fecha", "_selected_action": [registro.pk]},
+        follow=True,
+    )
+    registro.refresh_from_db()
+
+    assert "cambiada al" in respuesta.content.decode()
+    assert registro.fecha_emision == hoy
+    assert registro.estado == models.EstadoComprobante.BORRADOR
+
+
+def test_el_listado_tiene_el_filtro_de_comprobantes_de_otro_dia(
+    documentos, factura, cliente_falso, admin_cliente, configuracion
+):
+    from factec.django import admin_filtros, models
+
+    assert admin_filtros.FiltroFechaDesactualizada in (
+        _admin.site._registry[models.ComprobanteEmitido].get_list_filter(None)
+    )
+
+    registro = factura.emitir(encolar=False)          # ya enviado: no está «sin enviar»
+    respuesta = admin_cliente.get(
+        "/admin/sri_fe/comprobanteemitido/", {"fecha_desactualizada": "hoy"}
+    )
+    assert respuesta.status_code == 200
+    assert registro.clave_acceso not in respuesta.content.decode()
+
+
+def test_el_comando_revisar_firma_cuenta_el_estado_de_la_firma(configuracion):
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    salida = StringIO()
+    call_command("revisar_firma", stdout=salida)
+
+    contenido = salida.getvalue()
+    assert "correcto" in contenido
+    assert "Válido hasta" in contenido
+
+
+def test_el_comando_revisar_firma_falla_y_avisa_por_correo(configuracion):
+    """Programado (cron o Celery Beat) avisa antes de que falle una emisión."""
+    from io import StringIO
+
+    from django.core import mail
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+    from django.test import override_settings
+
+    import django
+
+    _con_certificado_de_otro_ruc()
+    ajustes = {"CLAVE_CIFRADO": "x" * 44, "CORREOS_AVISO": ["avisos@mitienda.ec"]}
+    salida = StringIO()
+    backend = {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}
+    # Django 6.1 sustituye EMAIL_BACKEND por MAILERS.
+    correo = {"MAILERS": {"default": backend}} if django.VERSION >= (6, 1) else {
+        "EMAIL_BACKEND": backend["BACKEND"]
+    }
+
+    with override_settings(FACTURACION_ELECTRONICA=ajustes, **correo):
+        with pytest.raises(CommandError, match="firma electrónica"):
+            call_command("revisar_firma", correo=True, stdout=salida)
+
+        assert "El RUC del certificado" in salida.getvalue()
+        assert len(mail.outbox) == 1
+        assert mail.outbox[0].to == ["avisos@mitienda.ec"]
+        assert "[SRI]" in mail.outbox[0].subject
+        assert "no coincide con el del emisor" in mail.outbox[0].body
+
+
+def test_la_tarea_periodica_revisa_la_firma(configuracion):
+    from factec.django import tasks
+
+    informe = tasks.revisar_certificado(avisar_por_correo=False)
+
+    assert informe["revisados"] == 1
+    assert informe["ok"] is True
+    assert informe["certificados"][0]["dias_restantes"] > 0
+
+
+def test_el_planificador_trae_las_tareas_periodicas():
+    from factec.django import conf
+
+    plan = conf.planificador()
+
+    assert set(plan) == {"sri_fe.revisar_certificado", "sri_fe.reintentar_pendientes"}
+    assert plan["sri_fe.revisar_certificado"]["task"] == "sri_fe.revisar_certificado"
+    assert plan["sri_fe.revisar_certificado"]["schedule"] > 0
+
+
+def test_el_admin_avisa_cuando_la_firma_impide_emitir(
+    documentos, factura, cliente_falso, admin_cliente, configuracion
+):
+    """El aviso aparece en los listados, que es donde se trabaja."""
+    _con_certificado_de_otro_ruc()
+
+    contenido = admin_cliente.get("/admin/sri_fe/comprobanteemitido/").content.decode()
+
+    assert "El RUC del certificado" in contenido

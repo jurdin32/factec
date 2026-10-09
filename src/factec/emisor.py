@@ -38,7 +38,7 @@ from .comprobantes.liquidacion_compra import LiquidacionCompra
 from .comprobantes.nota_credito import NotaCredito
 from .comprobantes.nota_debito import NotaDebito
 from .comprobantes.retencion import ComprobanteRetencion
-from .excepciones import ErrorValidacion
+from .excepciones import ErrorRevision, ErrorValidacion
 from .firma import Certificado, firmar_xml
 from .modelos import (
     Compensacion,
@@ -52,6 +52,8 @@ from .modelos import (
     Reembolso,
     Receptor,
 )
+from .revision import DIAS_AVISO_CERTIFICADO, InformeRevision, revisar_emision
+from .sri import fechas
 from .sri.soap import ClienteSRI, RespuestaAutorizacion, RespuestaRecepcion
 
 __all__ = ["EmisorElectronico", "ResultadoEmision"]
@@ -119,6 +121,8 @@ class EmisorElectronico:
         timeout: float = 30.0,
         secuencial_inicial: int = 1,
         validar_vigencia: bool = True,
+        revisar_antes: bool = True,
+        dias_aviso_certificado: int = DIAS_AVISO_CERTIFICADO,
     ) -> None:
         self.emisor = emisor
         self.ambiente = int(getattr(ambiente, "value", ambiente))
@@ -126,6 +130,8 @@ class EmisorElectronico:
         self.timeout = timeout
         self.secuencial_inicial = max(1, int(secuencial_inicial))
         self.validar_vigencia = validar_vigencia
+        self.revisar_antes = revisar_antes
+        self.dias_aviso_certificado = int(dias_aviso_certificado)
 
         self._certificado: Optional[Certificado] = None
         if isinstance(certificado, Certificado):
@@ -176,7 +182,7 @@ class EmisorElectronico:
         return {
             "emisor": self.emisor,
             "ambiente": self.ambiente,
-            "fecha_emision": fecha_emision or date.today(),
+            "fecha_emision": fecha_emision or fechas.hoy_en_ecuador(),
             "secuencial": secuencial or self.siguiente_secuencial(tipo),
         }
 
@@ -326,6 +332,19 @@ class EmisorElectronico:
 
     # ------------------------------------------------------------ flujo SRI
 
+    def revisar(self, comprobante: Comprobante) -> InformeRevision:
+        """Revisa el certificado y los datos **antes** de firmar y enviar.
+
+        No contacta con el SRI y no consume secuenciales. Con
+        ``revisar_antes=True`` (lo habitual) :meth:`emitir` la ejecuta sola y
+        lanza :class:`~factec.excepciones.ErrorRevision` si algo impide emitir.
+        """
+        return revisar_emision(
+            comprobante,
+            self._certificado,
+            dias_aviso=self.dias_aviso_certificado,
+        )
+
     def firmar(self, comprobante: Comprobante, *, algoritmo: str = "sha1") -> str:
         """Devuelve el XML del comprobante firmado con XAdES-BES."""
         return comprobante.firmar(self.certificado, algoritmo=algoritmo)
@@ -356,11 +375,22 @@ class EmisorElectronico:
         enviar: bool = True,
         intentos: int = 5,
         espera: float = 3.0,
+        revisar: bool = True,
     ) -> ResultadoEmision:
         """Ejecuta el ciclo completo de emisión.
 
         Con ``enviar=False`` solo construye y firma, sin contactar al SRI.
+
+        Antes de firmar se revisan el certificado y los datos (fecha de emisión,
+        totales, clave de acceso). Si hay algo que el SRI rechazaría, se lanza
+        :class:`~factec.excepciones.ErrorRevision` y **no se firma ni se envía**,
+        para no dejar el comprobante en un estado inconsistente. Con
+        ``revisar=False`` se omite esa comprobación.
         """
+        if revisar and self.revisar_antes:
+            informe = self.revisar(comprobante)
+            if not informe.puede_emitir:
+                raise ErrorRevision(informe=informe)
         resultado = ResultadoEmision(
             comprobante=comprobante,
             clave_acceso=comprobante.clave,

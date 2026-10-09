@@ -32,8 +32,9 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 
 from ..catalogos import TipoComprobante
 from ..comprobantes import Comprobante
-from ..excepciones import ErrorFacturacion
+from ..excepciones import ErrorFacturacion, ErrorRevision
 from ..firma import Certificado
+from ..sri import fechas
 from . import adaptadores as mod_adaptadores
 from . import conf, models, services
 
@@ -72,14 +73,67 @@ def comprobante_de(
     tipo: Optional[str] = None,
     emisor: Any = None,
     ambiente: Any = None,
+    fecha_emision: Any = None,
 ) -> Comprobante:
-    """Construye el comprobante (sin firmar) a partir del objeto."""
+    """Construye el comprobante (sin firmar) a partir del objeto.
+
+    La fecha de emisión es, por omisión, **la del día en que se firma** (ver
+    ``FECHA_EMISION_AL_EMITIR``). Con ``fecha_emision`` se fuerza una concreta.
+    """
     manejador = _clase_adaptador(obj, adaptador, tipo)
     if emisor is not None:
         manejador._emisor = emisor  # noqa: SLF001 - ajuste deliberado
     if ambiente is not None:
         manejador._ambiente = ambiente  # noqa: SLF001
+    if fecha_emision is not None:
+        manejador._fecha_emision = fecha_emision  # noqa: SLF001
     return manejador.comprobante(obj)
+
+
+def _fecha_desactualizada(registro: models.ComprobanteEmitido) -> bool:
+    """¿El comprobante quedó sin enviar y ya no es del día de hoy?
+
+    Un borrador (o un firmado que nunca llegó a enviarse) de un día anterior se
+    rehace para firmarlo con la fecha de hoy: el SRI solo admite la fecha del día
+    de la firma o una de los 90 días anteriores, y con la fecha vieja lo devolvería.
+    """
+    return registro.fecha_desactualizada
+
+
+def _fijar_fecha_de_emision(comprobante: Comprobante, *, fecha: Any = None) -> None:
+    """Deja el comprobante con la fecha del día en que se firma.
+
+    El SRI compara la fecha de emisión con su propio reloj, así que el comprobante
+    se firma con la fecha del día en que realmente se emite, no con la fecha con la
+    que se preparó el documento: así no salen comprobantes con fecha de otro día.
+    Con ``FECHA_EMISION_AL_EMITIR = False`` se respeta la fecha del documento, y con
+    ``fecha_emision=`` se indica una concreta (que sí se valida: nunca futura ni de
+    hace más de 90 días).
+    """
+    if fecha is not None:
+        nueva = fecha
+    elif not bool(conf.obtener("FECHA_EMISION_AL_EMITIR", True)):
+        return
+    else:
+        nueva = fechas.hoy_en_ecuador()
+
+    if comprobante.fecha_emision == nueva:
+        return
+    comprobante.fecha_emision = nueva
+    # La clave de acceso empieza por la fecha de emisión: se recalcula.
+    comprobante.clave_acceso = None
+
+
+def _revisar(comprobante: Comprobante, *, revisar: Optional[bool]) -> None:
+    """Revisa el comprobante y lanza :class:`ErrorRevision` si no se puede emitir."""
+    if revisar is None:
+        revisar = bool(conf.obtener("REVISAR_ANTES_DE_EMITIR", True))
+    if not revisar:
+        return
+    informe = services.revisar_comprobante(comprobante)
+    if not informe.puede_emitir:
+        logger.warning("No se emite: %s", informe.resumen())
+        raise ErrorRevision(informe=informe)
 
 
 def firmar_modelo(
@@ -109,6 +163,8 @@ def emitir(
     espera: Optional[float] = None,
     guardar_xml: Optional[bool] = None,
     vincular: bool = True,
+    fecha_emision: Any = None,
+    revisar: Optional[bool] = None,
 ) -> models.ComprobanteEmitido:
     """Emite el comprobante del objeto: XML, firma y envío al SRI.
 
@@ -116,6 +172,15 @@ def emitir(
     registrado, se reutiliza y solo se reintenta el envío; así no se duplican
     comprobantes ni se consumen secuenciales de más. Con ``forzar=True`` se crea
     uno nuevo desde cero (por ejemplo, tras corregir los datos).
+
+    Antes de firmar se **revisa** el comprobante (certificado vigente y del mismo
+    RUC, fecha de emisión dentro del rango del SRI, totales y clave de acceso): si
+    algo fallaría, se lanza :class:`~factec.excepciones.ErrorRevision` y no se emite
+    ni se consume secuencial. Con ``revisar=False`` se omite esa comprobación.
+
+    La fecha de emisión es la del día de la firma (``fecha_emision=`` fuerza otra).
+    Un comprobante que quedó sin enviar de un día anterior se rehace para no
+    reenviarlo con fecha vieja.
 
     El vínculo con el documento requiere un **modelo de Django guardado**. Con un
     objeto cualquiera (un diccionario, un ``dataclass``) el comprobante se emite
@@ -129,7 +194,10 @@ def emitir(
       según ``EMITIR_CON_CELERY``.
     """
     manejador = _clase_adaptador(obj, adaptador, tipo)
+    if fecha_emision is not None:
+        manejador._fecha_emision = fecha_emision  # noqa: SLF001 - ajuste deliberado
     tipo_comprobante = tipo or manejador.tipo
+    # (la fecha con la que se emite se fija en _fijar_fecha_de_emision)
 
     if not forzar:
         existente = models.ComprobanteEmitido.para_objeto(obj, tipo_comprobante)
@@ -151,6 +219,15 @@ def emitir(
                     "se genera uno nuevo con los datos actuales.",
                     existente.clave_acceso, obj, existente.estado,
                 )
+            elif _fecha_desactualizada(existente):
+                logger.info(
+                    "El comprobante %s del documento %s quedó sin enviar del %s; se "
+                    "refecha a hoy (%s) antes de firmarlo.",
+                    existente.clave_acceso, obj, existente.fecha_emision, fechas.hoy_en_ecuador(),
+                )
+                services.actualizar_fecha(existente)
+                _asociar_en_modelo(obj, existente)
+                return _enviar(existente, encolar=encolar, intentos=intentos, espera=espera)
             else:
                 logger.info(
                     "El documento %s ya tiene el comprobante %s (%s); se reintenta.",
@@ -160,6 +237,8 @@ def emitir(
                 return _enviar(existente, encolar=encolar, intentos=intentos, espera=espera)
 
     comprobante = manejador.comprobante(obj)
+    _fijar_fecha_de_emision(comprobante, fecha=fecha_emision)
+    _revisar(comprobante, revisar=revisar)
     registro = services.registrar(comprobante, guardar_xml=guardar_xml)
     if vincular:
         registro.vincular(obj)
@@ -215,6 +294,7 @@ def emitir_lote(
     encolar: Optional[bool] = None,
     forzar: bool = False,
     detener_en_error: bool = False,
+    revisar: Optional[bool] = None,
 ) -> List[Any]:
     """Emite varios comprobantes.
 
@@ -226,7 +306,10 @@ def emitir_lote(
     for objeto in objetos:
         try:
             resultados.append(
-                emitir(objeto, adaptador=adaptador, tipo=tipo, encolar=encolar, forzar=forzar)
+                emitir(
+                    objeto, adaptador=adaptador, tipo=tipo, encolar=encolar,
+                    forzar=forzar, revisar=revisar,
+                )
             )
         except Exception as exc:  # noqa: BLE001 - se reporta por elemento
             if detener_en_error:
@@ -261,9 +344,11 @@ def reintentar(
     Reutiliza el XML ya registrado (y firmado, si lo estaba), sin volver a
     construir el comprobante ni pedir un secuencial nuevo.
 
-    Si el SRI ya lo había **rechazado** (``DEVUELTO`` o ``NO_AUTORIZADO``), se
-    rehace el comprobante con los datos actuales del documento: reenviar el mismo
-    XML devolvería el mismo error.
+    Si el SRI ya lo había **rechazado** (``DEVUELTO`` o ``NO_AUTORIZADO``), se rehace
+    el comprobante con los datos actuales del documento: reenviar el mismo XML
+    devolvería el mismo error. Si simplemente quedó sin enviar de un día anterior,
+    se le cambia la fecha de emisión a la de hoy (que es la que admite el SRI) y se
+    firma: un comprobante se emite el día en que se firma.
     """
     registro = models.ComprobanteEmitido.para_objeto(obj, tipo)
     if registro is None:
@@ -279,4 +364,12 @@ def reintentar(
             registro.clave_acceso, registro.estado,
         )
         return emitir(obj, tipo=tipo, encolar=encolar, intentos=intentos, espera=espera)
+    if _fecha_desactualizada(registro):
+        logger.info(
+            "El comprobante %s quedó sin enviar del %s; se refecha a hoy (%s) antes de "
+            "firmarlo.",
+            registro.clave_acceso, registro.fecha_emision, fechas.hoy_en_ecuador(),
+        )
+        services.actualizar_fecha(registro)
+        return _enviar(registro, encolar=encolar, intentos=intentos, espera=espera)
     return _enviar(registro, encolar=encolar, intentos=intentos, espera=espera)

@@ -41,7 +41,7 @@ from .lectura import (
     leer_autorizacion,
     leer_comprobante,
 )
-from .sri.fechas import DIAS_TOLERANCIA, hoy_en_ecuador
+from .sri import fechas
 
 __all__ = [
     "InformeVerificacion",
@@ -346,8 +346,10 @@ def verificar_comprobante(
 
     # --- fecha de emisión (la ventana que aplica el SRI)
     if comprobante.fecha_emision:
-        referencia = hoy or hoy_en_ecuador()
-        limite = referencia - timedelta(days=DIAS_TOLERANCIA if dias is None else dias)
+        referencia = hoy or fechas.hoy_en_ecuador()
+        limite = referencia - timedelta(
+            days=fechas.DIAS_TOLERANCIA if dias is None else dias
+        )
         informe.fecha_en_rango = limite <= comprobante.fecha_emision <= referencia
         if not informe.fecha_en_rango:
             informe.añadir_problema(

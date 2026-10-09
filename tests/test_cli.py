@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -207,3 +210,97 @@ class TestLeerYVerificar:
         datos = json.loads(capsys.readouterr().out)
         assert datos["valido"] is True
         assert "firmas" in datos
+
+
+class TestRevisarYFecha:
+    """``revisar`` avisa antes de emitir y ``fecha`` refecha un comprobante."""
+
+    def _ejemplo(self, tmp_path) -> Path:
+        """Genera los XML de ejemplo sin ensuciar la salida de la prueba."""
+        destino = tmp_path / "salida"
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(["ejemplo", "--salida", str(destino)])
+        return destino / "factura.xml"
+
+    def test_revisa_un_comprobante_correcto(self, tmp_path, ruta_certificado, capsys):
+        factura = self._ejemplo(tmp_path)
+
+        codigo = main([
+            "revisar", str(factura),
+            "--certificado", str(ruta_certificado), "--clave-clave", "clave-de-pruebas",
+        ])
+
+        salida = capsys.readouterr()
+        datos = json.loads(salida.out)
+        assert codigo == 0
+        assert datos["puede_emitir"] is True
+        assert datos["certificado"]["ok"] is True
+        assert datos["certificado"]["ruc"] == "1790012345001"
+        assert datos["fecha_en_rango"] is True
+        assert "listo para emitir" in salida.err
+
+    def test_sin_certificado_avisa_que_no_se_puede_emitir(self, tmp_path, capsys):
+        factura = self._ejemplo(tmp_path)
+
+        codigo = main(["revisar", str(factura)])
+
+        salida = capsys.readouterr()
+        assert codigo == 4
+        assert "No hay certificado de firma" in salida.err
+        assert json.loads(salida.out)["puede_emitir"] is False
+
+    def test_revisa_solo_el_certificado(self, ruta_certificado, capsys):
+        codigo = main([
+            "revisar", "--certificado", str(ruta_certificado),
+            "--clave-clave", "clave-de-pruebas",
+        ])
+
+        salida = capsys.readouterr()
+        assert codigo == 0
+        assert json.loads(salida.out)["ok"] is True
+        assert "se puede usar para firmar" in salida.err
+
+    def test_avisa_cuando_la_firma_esta_por_vencer(self, tmp_path, ruta_certificado, capsys):
+        factura = self._ejemplo(tmp_path)
+
+        codigo = main([
+            "revisar", str(factura), "--certificado", str(ruta_certificado),
+            "--clave-clave", "clave-de-pruebas", "--dias-aviso", "4000",
+        ])
+
+        salida = capsys.readouterr()
+        assert codigo == 0                       # aviso, no error
+        assert json.loads(salida.out)["avisos"] != []
+
+    def test_fecha_cambia_la_fecha_y_la_clave(self, tmp_path, capsys):
+        factura = self._ejemplo(tmp_path)
+        salida_xml = tmp_path / "hoy.xml"
+
+        codigo = main(["fecha", str(factura), "--fecha", "2026-10-08",
+                       "--salida", str(salida_xml)])
+
+        assert codigo == 0
+        assert "clave:" in capsys.readouterr().out
+        contenido = salida_xml.read_text(encoding="utf-8")
+        assert "<fechaEmision>08/10/2026</fechaEmision>" in contenido
+        assert "081020260117900123450011001001000000001" in contenido
+
+    def test_fecha_sin_salida_imprime_el_xml(self, tmp_path, capsys):
+        factura = self._ejemplo(tmp_path)
+
+        assert main(["fecha", str(factura), "--fecha", "2026-10-08"]) == 0
+        assert "<fechaEmision>08/10/2026</fechaEmision>" in capsys.readouterr().out
+
+    def test_revisar_la_fecha_cambiada(self, tmp_path, ruta_certificado, capsys):
+        """``--fecha`` permite revisar el comprobante como quedará al firmarlo."""
+        factura = self._ejemplo(tmp_path)
+
+        codigo = main([
+            "revisar", str(factura), "--fecha", "2026-10-08",
+            "--certificado", str(ruta_certificado), "--clave-clave", "clave-de-pruebas",
+        ])
+
+        salida = capsys.readouterr()
+        assert codigo == 0
+        assert "fecha de emisión" in salida.err
+        assert json.loads(salida.out)["fecha_emision"] == "2026-10-08"

@@ -14,6 +14,7 @@ from factec.excepciones import ErrorFirma
 from factec.firma import Certificado, certificado_del_xml, firmar_xml
 from factec.lectura import leer_comprobante
 from factec.modelos import Detalle, Emisor, Impuesto, Receptor
+from factec.sri.fechas import DIAS_TOLERANCIA
 from factec.verificacion import (
     InformeVerificacion,
     verificar_clave,
@@ -123,7 +124,10 @@ class TestVerificarComprobante:
         assert verificar_clave(leido) == (False, False)
 
     def test_detecta_una_fecha_fuera_de_la_ventana(self, certificado):
-        informe = verificar_comprobante(_firmada(certificado), hoy=FECHA + timedelta(days=120))
+        informe = verificar_comprobante(
+            _firmada(certificado), hoy=FECHA + timedelta(days=120),
+            dias=DIAS_TOLERANCIA,
+        )
 
         assert informe.fecha_en_rango is False
         assert any("ventana del SRI" in problema for problema in informe.problemas)

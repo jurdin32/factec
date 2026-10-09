@@ -28,7 +28,7 @@ from ..clave_acceso import (
     validar_clave_acceso,
 )
 from ..excepciones import ErrorValidacion
-from ..sri.fechas import validar_fecha_emision
+from ..sri import fechas
 from ..modelos import Emisor, InfoAdicional, a_decimal, cuantizar
 
 __all__ = [
@@ -279,6 +279,6 @@ class Comprobante:
             raise ErrorValidacion(f"Tipo de emisión inválido: {self.tipo_emision!r}")
         self.secuencial_normalizado  # lanza si el secuencial no es válido
         if self.VALIDAR_FECHA_EMISION:
-            validar_fecha_emision(self.fecha_emision)
+            fechas.validar_fecha_emision(self.fecha_emision)
         if self.clave_acceso and not validar_clave_acceso(self.clave_acceso):
             raise ErrorValidacion(f"La clave de acceso no es válida: {self.clave_acceso!r}")

@@ -24,6 +24,7 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from ..catalogos import DESCRIPCION_AMBIENTE, ETIQUETA_AMBIENTE, Ambiente, leer_ambiente
+from ..revision import DIAS_AVISO_CERTIFICADO
 from .campos_adicionales import (
     MAXIMO_CAMPOS_ADICIONALES,
     leer_campos_adicionales,
@@ -320,16 +321,61 @@ class ConfiguracionEmisor(models.Model):
 
     def validar_firma(self) -> List[str]:
         """Comprueba el certificado y devuelve avisos (o lanza si no se puede abrir)."""
+        from . import conf
+
         avisos: List[str] = []
         certificado = self.certificado_obj()
         if certificado.vencido():
             avisos.append("El certificado está vencido o aún no es válido.")
+        else:
+            dias = certificado.dias_restantes()
+            aviso_desde = int(
+                conf.obtener("DIAS_AVISO_CERTIFICADO", DIAS_AVISO_CERTIFICADO)
+            )
+            if aviso_desde and dias <= aviso_desde:
+                avisos.append(
+                    f"El certificado vence en {dias} día(s): renuévelo antes de esa "
+                    "fecha para no quedarse sin poder emitir."
+                )
         ruc_cert = self.ruc_del_certificado()
         if ruc_cert and ruc_cert != self.ruc:
             avisos.append(
                 f"El RUC del certificado ({ruc_cert}) no coincide con el del emisor ({self.ruc})."
             )
         return avisos
+
+    def revisar_certificado(
+        self, *, dias_aviso: Optional[int] = None, momento: Any = None
+    ) -> Any:
+        """Revisa el certificado de firma: vigencia, titular y RUC.
+
+        Devuelve un :class:`factec.revision.RevisionCertificado` y **nunca** lanza
+        excepción: si el ``.p12`` no se puede abrir, el motivo viene en
+        ``problemas``. Es lo que se usa en el admin y en la revisión periódica.
+        """
+        from ..revision import RevisionCertificado, revisar_certificado
+
+        try:
+            certificado = self.certificado_obj(validar_vigencia=False)
+        except Exception as exc:  # noqa: BLE001 - el motivo se informa, no se lanza
+            informe = RevisionCertificado()
+            informe.añadir_problema(f"No se pudo abrir el certificado de firma: {exc}")
+            return informe
+
+        return revisar_certificado(
+            certificado,
+            emisor=self.a_emisor(),
+            dias_aviso=(
+                DIAS_AVISO_CERTIFICADO if dias_aviso is None else int(dias_aviso)
+            ),
+            momento=momento,
+        )
+
+    @property
+    def certificado_dias_restantes(self) -> Optional[int]:
+        """Días que le quedan al certificado (``None`` si no se puede leer)."""
+        revisado = self.revisar_certificado()
+        return revisado.dias_restantes if revisado.cargado else None
 
     # ------------------------------------------------------------- guardado
 
@@ -499,6 +545,37 @@ class ComprobanteEmitido(models.Model):
         from . import consulta
 
         return consulta.verificar(self, exigir_firma=exigir_firma)
+
+    def revisar(self, **opciones: Any) -> Any:
+        """Revisa el comprobante **antes** de firmarlo y enviarlo.
+
+        Comprueba el certificado de firma, la fecha de emisión, la clave de acceso y
+        los totales. Devuelve un :class:`factec.revision.InformeRevision`: si
+        ``puede_emitir`` es ``False``, hay que corregir ``problemas`` antes de
+        emitir. No contacta con el SRI::
+
+            informe = registro.revisar()
+            if not informe.puede_emitir:
+                return JsonResponse({"problemas": informe.problemas}, status=400)
+        """
+        from . import services
+
+        return services.revisar(self, **opciones)
+
+    @property
+    def fecha_desactualizada(self) -> bool:
+        """``True`` si quedó sin enviar y ya no es del día de hoy.
+
+        Un comprobante en borrador de un día anterior debe rehacerse para firmarlo
+        con la fecha de hoy: el SRI rechaza la fecha vieja con «FECHA EMISIÓN
+        EXTEMPORANEA».
+        """
+        from ..sri import fechas
+        from . import conf
+
+        if not bool(conf.obtener("FECHA_EMISION_AL_EMITIR", True)):
+            return False
+        return self.intentos == 0 and self.fecha_emision != fechas.hoy_en_ecuador()
 
     def verificar_en_el_sri(
         self,

@@ -160,6 +160,33 @@ hoy_en_ecuador()                 # la fecha con la que compara el SRI
 validar_fecha_emision(fecha)     # lanza ErrorValidacion si el SRI la rechazaría
 ```
 
+### La fecha de emisión es la del día en que se firma
+
+Un comprobante se firma **el día en que se emite**, no cuando se preparó: el SRI
+valida esa fecha contra su propio reloj. Por eso, al emitir, el paquete pone la
+fecha del día (hora de Ecuador) en lugar de la fecha del documento, y un borrador
+que se quedó de otro día se refecha antes de firmarlo (se le recalcula la clave de
+acceso) en vez de reenviarse con la fecha vieja.
+
+```python
+# settings.py — comportamiento por omisión (la fecha del día de la firma)
+FACTURACION_ELECTRONICA = {
+    "FECHA_EMISION_AL_EMITIR": True,
+}
+
+# ¿Necesita emitir con otra fecha (dentro de los 90 días que admite el SRI)?
+facturacion.emitir(mi_factura, fecha_emision=date(2026, 10, 1))
+```
+
+Como la fecha la pone la firma, un documento guardado con una fecha rara (por
+ejemplo, futura porque el servidor estaba en UTC) no deja el comprobante
+inservible: se emite con la de hoy. Y si prefiere que mande la fecha del documento,
+ponga `FECHA_EMISION_AL_EMITIR: False`.
+
+Desde el admin, **«Actualizar la fecha de emisión al día de hoy»** hace lo mismo
+sobre los comprobantes seleccionados, y el filtro **«Sin enviar, de otro día (hay
+que refechar)»** los localiza de un vistazo.
+
 ---
 
 ## Servicios que hay que levantar
@@ -169,7 +196,7 @@ validar_fecha_emision(fecha)     # lanza ErrorValidacion si el SRI la rechazarí
 | Django | Sí | `python manage.py runserver` (desarrollo) o `gunicorn mi_proyecto.wsgi` (producción) |
 | Redis | Solo si usa Celery | `redis-server` (o `docker run -p 6379:6379 redis`) |
 | Celery worker | Solo si usa Celery | `celery -A mi_proyecto worker -l info` |
-| Celery beat | Opcional | `celery -A mi_proyecto beat -l info` (reintenta los pendientes) |
+| Celery beat | Opcional | `celery -A mi_proyecto beat -l info` (revisa la firma y reintenta los pendientes) |
 | Archivos estáticos | Al desplegar | `python manage.py collectstatic` (con `DEBUG = False`) |
 
 **¿Hace falta Celery?** No. Sin Celery, `emitir()` firma, envía y espera la
@@ -192,6 +219,9 @@ python manage.py importar_ruc_sri --ruc 0703886697001 --sin-consultar \
 
 python manage.py archivar_comprobantes            # reescribe los archivos de los ya emitidos
 python manage.py archivar_comprobantes --desde 2026-10-01 --estado DEVUELTO --simular
+
+python manage.py revisar_firma                   # ¿está la firma para emitir? (avisa si no)
+python manage.py revisar_firma --correo          # además, avisa por correo
 
 sri-fe --help                # línea de comandos del núcleo: clave, firmar, enviar…
 ```
@@ -264,6 +294,73 @@ FACTURACION_ELECTRONICA = {
 
 ---
 
+## Revisar antes de emitir (la firma, primero)
+
+Si el certificado está vencido, o es de otro contribuyente, el SRI devuelve el
+comprobante y el documento queda en un estado incómodo (secuencial gastado, factura
+«devuelta»). Para que eso no pase, **antes de firmar y enviar** el paquete revisa:
+
+* el **certificado**: que se pueda abrir, que esté vigente y que su RUC sea el del
+  emisor (y avisa con antelación de que va a vencer);
+* la **fecha de emisión**: dentro de la ventana que admite el SRI;
+* los **datos**: totales, clave de acceso y el resto de reglas del SRI.
+
+Si algo falla **no se emite**: se explica el motivo y no se gasta secuencial.
+
+```python
+from factec.django import services
+
+informe = services.revisar_comprobante(comprobante)     # o registro.revisar()
+informe.puede_emitir          # False si hay algo que el SRI rechazaría
+informe.problemas             # ["El certificado de firma está vencido desde el…"]
+informe.avisos                # ["El certificado de firma vence el 14/10/2026 (en 6 día(s))…"]
+informe.certificado.ruc, informe.certificado.dias_restantes
+```
+
+Y al emitir, la revisión es automática: si no pasa, `emitir()` lanza
+`ErrorRevision` (con el informe dentro) en lugar de enviar algo que va a volver mal.
+
+```python
+from factec.excepciones import ErrorRevision
+
+try:
+    registro = facturacion.emitir(mi_factura)
+except ErrorRevision as error:
+    return JsonResponse({"problemas": error.informe.problemas}, status=400)
+```
+
+### La revisión programada (que el aviso llegue antes)
+
+El aviso sirve si llega **antes** de que falle una emisión. El paquete trae la
+revisión lista para programarla: revisa la firma una vez al día y avisa por correo
+cuando está vencida o a punto de vencer.
+
+```python
+# settings.py
+from factec.django.conf import planificador
+
+CELERY_BEAT_SCHEDULE = {**planificador()}      # revisa la firma a diario
+                                               # y reintenta los pendientes
+
+FACTURACION_ELECTRONICA = {
+    "CORREOS_AVISO": ["administracion@mitienda.ec"],   # a quién avisar
+    "DIAS_AVISO_CERTIFICADO": 30,                      # con cuánta antelación
+}
+```
+
+Sin Celery, programe el comando en el cron (o en el Programador de tareas):
+
+```bash
+# todos los días a las 7 de la mañana
+0 7 * * * cd /ruta/del/proyecto && ./venv/bin/python manage.py revisar_firma --correo
+```
+
+En el admin, además, aparece un **aviso en el listado** mientras la firma impida
+emitir, y hay dos acciones sobre los comprobantes: **«Revisar antes de emitir
+(certificado y datos)»** y **«Actualizar la fecha de emisión al día de hoy»**.
+
+---
+
 ## Leer y verificar comprobantes
 
 Sirve para sus comprobantes y para los que le entreguen (por ejemplo, las
@@ -327,7 +424,7 @@ informe.certificado.nombre, informe.certificado.vencido()
 | [docs/django.md](docs/django.md) | La app de Django: modelos, admin, adaptadores, Celery y ajustes |
 | [docs/prueba-real.md](docs/prueba-real.md) | Emitir de verdad contra el ambiente de pruebas del SRI |
 | [examples/](examples/) | Scripts listos para ejecutar |
-| [tests/](tests/) | 450 pruebas, incluida la validación contra los XSD oficiales |
+| [tests/](tests/) | 503 pruebas, incluida la validación contra los XSD oficiales |
 
 ---
 

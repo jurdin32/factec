@@ -24,7 +24,7 @@ Uso rápido::
 
 from __future__ import annotations
 
-from . import catalogos, clave_acceso, comprobantes, firma, modelos, sri
+from . import catalogos, clave_acceso, comprobantes, firma, modelos, revision, sri
 from .clave_acceso import (
     calcular_digito_verificador,
     descomponer_clave_acceso,
@@ -50,6 +50,7 @@ from .excepciones import (
     ErrorFacturacion,
     ErrorFirma,
     ErrorRecepcion,
+    ErrorRevision,
     ErrorSRI,
     ErrorValidacion,
 )
@@ -67,6 +68,14 @@ from .lectura import (
     DetalleLeido,
     leer_autorizacion,
     leer_comprobante,
+)
+from .revision import (
+    DIAS_AVISO_CERTIFICADO,
+    InformeRevision,
+    RevisionCertificado,
+    revisar_certificado,
+    revisar_emision,
+    revisar_xml,
 )
 from .modelos import (
     Compensacion,
@@ -101,7 +110,7 @@ from .sri import (
     existe_ruc,
 )
 
-__version__ = "1.5.1"
+__version__ = "1.6.0"
 
 __all__ = [
     "__version__",
@@ -156,6 +165,13 @@ __all__ = [
     "verificar_comprobante",
     "verificar_en_el_sri",
     "InformeVerificacion",
+    # revisar antes de emitir
+    "revisar_certificado",
+    "revisar_emision",
+    "revisar_xml",
+    "InformeRevision",
+    "RevisionCertificado",
+    "DIAS_AVISO_CERTIFICADO",
     # SRI
     "ClienteSRI",
     "RespuestaRecepcion",
@@ -171,6 +187,7 @@ __all__ = [
     "ErrorValidacion",
     "ErrorFirma",
     "ErrorCertificado",
+    "ErrorRevision",
     "ErrorSRI",
     "ErrorRecepcion",
     "ErrorAutorizacion",
@@ -178,6 +195,7 @@ __all__ = [
     "catalogos",
     "lectura",
     "verificacion",
+    "revision",
     "modelos",
     "comprobantes",
     "firma",
