@@ -510,10 +510,10 @@ comprobar_redis() {
 
 case "$ACCION" in
   estado)
-    # El estado se puede consultar también en macOS o en un contenedor.
+    # El estado se puede consultar también en macOS o en un contenedor, y no
+    # necesita permisos: solo mira y cuenta.
     detectar_proyecto
     detectar_venv
-    preparar_sudo
     estado
     comprobar_redis
     ;;
