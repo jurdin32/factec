@@ -509,7 +509,7 @@ borrador que quedó de otro día se **refecha** antes de firmarlo (nueva fecha, 
 clave de acceso) en vez de reenviarse con la fecha vieja.
 
 ```python
-import facturacion
+from factec.django import facturacion
 
 # La fecha del documento se respeta (dentro de la ventana del SRI)
 facturacion.emitir(mi_factura, fecha_emision=date(2026, 10, 1))
@@ -517,6 +517,11 @@ facturacion.emitir(mi_factura, fecha_emision=date(2026, 10, 1))
 # Refechar un comprobante ya guardado (antes de firmarlo)
 services.actualizar_fecha(registro)          # a hoy; devuelve el registro actualizado
 registro.fecha_desactualizada                # True si quedó sin enviar de otro día
+
+# Ver qué XML se va a firmar, sin emitir nada
+comprobante = facturacion.comprobante_de(mi_factura)   # fecha del documento
+facturacion.fijar_fecha_de_emision(comprobante)        # la del día de la firma
+comprobante.fecha_emision, comprobante.clave
 ```
 
 Como la fecha la pone la firma, un documento con una fecha mal puesta (futura o

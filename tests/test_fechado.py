@@ -139,3 +139,22 @@ def test_el_resultado_se_puede_pasar_a_diccionario():
     assert datos["fecha"] == HOY.isoformat()
     assert datos["fecha_anterior"] == FECHA.isoformat()
     assert len(datos["clave_acceso"]) == 49
+
+
+# ------------------------------- la fecha del día de la firma (Django)
+
+
+def test_se_puede_fijar_la_fecha_de_firma_antes_de_construir_el_xml():
+    """Es lo que hace ``emitir()``: la fecha es la del día, no la del documento."""
+    from factec.sri import fechas
+
+    factura = _factura()
+    clave_original = factura.clave
+
+    from factec.django.facturacion import fijar_fecha_de_emision
+
+    fijar_fecha_de_emision(factura)
+
+    assert factura.fecha_emision == fechas.hoy_en_ecuador()
+    assert factura.clave != clave_original
+    assert factura.clave[:8] == fechas.hoy_en_ecuador().strftime("%d%m%Y")

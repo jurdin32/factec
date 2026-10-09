@@ -248,8 +248,15 @@ class InformeRevision:
         self.avisos.append(texto)
 
     def lleva(self, texto: str) -> bool:
-        """¿El informe ya incluye ese problema o ese aviso?"""
-        return texto in self.problemas or texto in self.avisos
+        """¿El informe ya incluye ese problema o ese aviso?
+
+        Se compara también por contenido: ``validar()`` del comprobante y la
+        comprobación de la fecha cuentan lo mismo con distinto preámbulo.
+        """
+        return any(
+            texto in conocido or conocido in texto
+            for conocido in (*self.problemas, *self.avisos)
+        )
 
     def resumen(self) -> str:
         """Una línea para un mensaje del admin, un log o una vista."""

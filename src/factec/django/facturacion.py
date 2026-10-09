@@ -40,6 +40,7 @@ from . import conf, models, services
 
 __all__ = [
     "comprobante_de",
+    "fijar_fecha_de_emision",
     "firmar_modelo",
     "emitir",
     "emitir_sincrono",
@@ -77,8 +78,9 @@ def comprobante_de(
 ) -> Comprobante:
     """Construye el comprobante (sin firmar) a partir del objeto.
 
-    La fecha de emisión es, por omisión, **la del día en que se firma** (ver
-    ``FECHA_EMISION_AL_EMITIR``). Con ``fecha_emision`` se fuerza una concreta.
+    La fecha de emisión es la del documento (o la que se indique en
+    ``fecha_emision``); la del día de la firma la pone :func:`fijar_fecha_de_emision`,
+    que es lo que hace :func:`emitir` y :func:`firmar_modelo`.
     """
     manejador = _clase_adaptador(obj, adaptador, tipo)
     if emisor is not None:
@@ -100,7 +102,7 @@ def _fecha_desactualizada(registro: models.ComprobanteEmitido) -> bool:
     return registro.fecha_desactualizada
 
 
-def _fijar_fecha_de_emision(comprobante: Comprobante, *, fecha: Any = None) -> None:
+def fijar_fecha_de_emision(comprobante: Comprobante, *, fecha: Any = None) -> None:
     """Deja el comprobante con la fecha del día en que se firma.
 
     El SRI compara la fecha de emisión con su propio reloj, así que el comprobante
@@ -143,9 +145,16 @@ def firmar_modelo(
     tipo: Optional[str] = None,
     certificado: Optional[Certificado] = None,
     algoritmo: Optional[str] = None,
+    fecha_emision: Any = None,
 ) -> str:
-    """Devuelve el XML firmado del comprobante que corresponde al objeto."""
-    comprobante = comprobante_de(obj, adaptador=adaptador, tipo=tipo)
+    """Devuelve el XML firmado del comprobante que corresponde al objeto.
+
+    Se firma con la fecha del día (``FECHA_EMISION_AL_EMITIR``), como al emitir.
+    """
+    comprobante = comprobante_de(
+        obj, adaptador=adaptador, tipo=tipo, fecha_emision=fecha_emision
+    )
+    fijar_fecha_de_emision(comprobante, fecha=fecha_emision)
     return comprobante.firmar(
         certificado or conf.certificado(),
         algoritmo=algoritmo or conf.obtener("ALGORITMO_FIRMA", "sha1"),
@@ -197,7 +206,7 @@ def emitir(
     if fecha_emision is not None:
         manejador._fecha_emision = fecha_emision  # noqa: SLF001 - ajuste deliberado
     tipo_comprobante = tipo or manejador.tipo
-    # (la fecha con la que se emite se fija en _fijar_fecha_de_emision)
+    # (la fecha con la que se emite la fija fijar_fecha_de_emision)
 
     if not forzar:
         existente = models.ComprobanteEmitido.para_objeto(obj, tipo_comprobante)
@@ -237,7 +246,7 @@ def emitir(
                 return _enviar(existente, encolar=encolar, intentos=intentos, espera=espera)
 
     comprobante = manejador.comprobante(obj)
-    _fijar_fecha_de_emision(comprobante, fecha=fecha_emision)
+    fijar_fecha_de_emision(comprobante, fecha=fecha_emision)
     _revisar(comprobante, revisar=revisar)
     registro = services.registrar(comprobante, guardar_xml=guardar_xml)
     if vincular:
