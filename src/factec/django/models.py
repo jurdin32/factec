@@ -23,6 +23,7 @@ from django.core.validators import FileExtensionValidator
 from django.db import models, transaction
 from django.utils import timezone
 
+from ..catalogos import DESCRIPCION_AMBIENTE, Ambiente, leer_ambiente
 from .campos_adicionales import (
     MAXIMO_CAMPOS_ADICIONALES,
     leer_campos_adicionales,
@@ -70,6 +71,13 @@ def es_modelo_guardado(objeto: Any) -> bool:
     )
 
 
+#: Nombre y explicación de cada ambiente, tal como se elige en el admin.
+OPCIONES_AMBIENTE: List[tuple] = [
+    (int(Ambiente.PRUEBAS), DESCRIPCION_AMBIENTE[int(Ambiente.PRUEBAS)]),
+    (int(Ambiente.PRODUCCION), DESCRIPCION_AMBIENTE[int(Ambiente.PRODUCCION)]),
+]
+
+
 class TipoComprobante(models.TextChoices):
     """Códigos ``codDoc`` del SRI (tabla 1)."""
 
@@ -113,8 +121,12 @@ class ConfiguracionEmisor(models.Model):
         help_text="Solo se usa una configuración activa por ambiente.",
     )
     ambiente = models.PositiveSmallIntegerField(
-        "ambiente", default=1, choices=[(1, "1 - Pruebas"), (2, "2 - Producción")],
-        help_text="1 = pruebas, 2 = producción.",
+        "ambiente", default=int(Ambiente.PRUEBAS),
+        choices=OPCIONES_AMBIENTE,
+        help_text=(
+            "Pruebas (1): comprobantes sin validez fiscal, para ensayar. "
+            "Producción (2): comprobantes con validez legal ante el SRI."
+        ),
     )
 
     # --- Identificación del contribuyente ---------------------------------

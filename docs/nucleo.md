@@ -99,6 +99,35 @@ Cada comprobante genera su clave automáticamente la primera vez que se pide
 
 ---
 
+## Los ambientes: «pruebas» y «producción»
+
+El SRI tiene dos ambientes, y en el paquete se pueden escribir por su nombre en
+cualquier sitio donde se espere el número:
+
+| Para escribir | Número | Qué es |
+|---|---|---|
+| `"pruebas"` (o `prueba`, `test`, `testing`, `sandbox`, `certificación`) | `1` | Comprobantes **sin validez fiscal**, para ensayar. Es el valor por omisión |
+| `"producción"` (o `produccion`, `prod`, `production`, `real`) | `2` | Comprobantes con **validez legal** ante el SRI |
+
+```python
+from factec import EmisorElectronico
+from factec.catalogos import Ambiente, leer_ambiente
+
+EmisorElectronico(..., ambiente="pruebas")      # igual que ambiente=1
+leer_ambiente("producción")                     # 2
+leer_ambiente(Ambiente.PRUEBAS)                 # 1
+leer_ambiente("producion")                      # ErrorValidacion: use «pruebas» o «producción»
+
+ClienteSRI(ambiente="pruebas")                  # el cliente SOAP, igual
+```
+
+Y en la línea de comandos:
+
+```bash
+sri-fe autorizar <clave> --ambiente pruebas
+sri-fe enviar factura.xml --ambiente producción
+```
+
 ## Fecha de emisión (ventana que exige el SRI)
 
 El SRI rechaza el comprobante con el mensaje 65, «FECHA EMISIÓN EXTEMPORANEA»,

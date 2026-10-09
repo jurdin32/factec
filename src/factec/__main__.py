@@ -37,6 +37,7 @@ from .catalogos import (
     TipoComprobante,
     TipoIdentificacion,
     VERSIONES,
+    leer_ambiente,
 )
 from .clave_acceso import (
     descomponer_clave_acceso,
@@ -44,7 +45,7 @@ from .clave_acceso import (
     validar_clave_acceso,
 )
 from .emisor import EmisorElectronico
-from .excepciones import ErrorFacturacion
+from .excepciones import ErrorFacturacion, ErrorValidacion
 from .firma import Certificado, firmar_xml, verificar_firma
 from .lectura import leer_comprobante
 from .verificacion import verificar_comprobante
@@ -60,10 +61,11 @@ from .sri.soap import ClienteSRI
 
 
 def _ambiente(valor: str) -> int:
-    mapa = {"pruebas": 1, "1": 1, "produccion": 2, "producción": 2, "2": 2}
-    if valor.lower() not in mapa:
-        raise argparse.ArgumentTypeError("El ambiente debe ser 'pruebas' o 'produccion'.")
-    return mapa[valor.lower()]
+    """Acepta «pruebas» o «producción» (y sus números 1 y 2)."""
+    try:
+        return leer_ambiente(valor)
+    except ErrorValidacion as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def _emisor_de_ejemplo() -> Emisor:

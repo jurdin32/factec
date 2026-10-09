@@ -53,6 +53,19 @@ GRUPOS: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
             "Retencion",
             "GuiaDestinatario",
             "RetencionDocSustento",
+            "NotaDebitoMotivo",
+        ),
+    ),
+    (
+        "sri_fe_lineas",
+        "Líneas y detalles",
+        (
+            "FacturaDetalle",
+            "LiquidacionCompraDetalle",
+            "NotaCreditoDetalle",
+            "GuiaDetalle",
+            "RetencionImpuesto",
+            "RetencionDocSustentoImpuesto",
         ),
     ),
     (

@@ -125,8 +125,16 @@ class TestUrls:
         assert not url_autorizacion(2).count("celcer")
 
     def test_ambiente_invalido(self):
-        with pytest.raises(ValueError):
+        from factec.excepciones import ErrorValidacion
+
+        with pytest.raises(ErrorValidacion, match="pruebas"):
             url_recepcion(9)
+
+    def test_el_ambiente_se_puede_escribir_con_su_nombre(self):
+        """«pruebas» y «producción» valen igual que 1 y 2."""
+        assert url_recepcion("pruebas") == url_recepcion(1)
+        assert url_recepcion("producción") == url_recepcion(2)
+        assert url_autorizacion("PRUEBAS") == url_autorizacion(1)
 
 
 class TestRecepcion:

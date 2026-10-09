@@ -21,7 +21,7 @@ from typing import Any, Dict, Optional
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
-from ..catalogos import Ambiente
+from ..catalogos import Ambiente, leer_ambiente
 from ..excepciones import ErrorValidacion
 from ..modelos import Emisor
 
@@ -41,6 +41,7 @@ __all__ = [
 ]
 
 AJUSTES_POR_DEFECTO: Dict[str, Any] = {
+    #: «pruebas» (1) o «producción» (2): se admite el nombre o el número.
     "AMBIENTE": int(Ambiente.PRUEBAS),
     "CERTIFICADO": None,
     "CLAVE_CERTIFICADO": None,
@@ -61,6 +62,9 @@ AJUSTES_POR_DEFECTO: Dict[str, Any] = {
     "VALIDAR_VIGENCIA": True,
     "ALGORITMO_FIRMA": "sha1",
     "USAR_BASE_DE_DATOS": True,
+    #: Filtros, búsquedas y columnas que la tienda añade al admin (ver
+    #: :mod:`factec.django.admin_filtros`).
+    "ADMIN": {},
 }
 
 _VARIABLES_ENTORNO = {
@@ -90,7 +94,8 @@ def ajustes() -> Dict[str, Any]:
         if valor not in (None, ""):
             configuracion[clave] = valor
 
-    configuracion["AMBIENTE"] = int(configuracion["AMBIENTE"])
+    # «pruebas» y «producción» valen igual que 1 y 2.
+    configuracion["AMBIENTE"] = leer_ambiente(configuracion["AMBIENTE"])
     configuracion["REINTENTOS_AUTORIZACION"] = int(configuracion["REINTENTOS_AUTORIZACION"])
     configuracion["ESPERA_AUTORIZACION"] = float(configuracion["ESPERA_AUTORIZACION"])
     configuracion["TIMEOUT"] = float(configuracion["TIMEOUT"])
@@ -144,7 +149,7 @@ def ambiente() -> int:
     activa = configuracion_activa()
     if activa is not None:
         return int(activa.ambiente)
-    return int(obtener("AMBIENTE", int(Ambiente.PRUEBAS)))
+    return leer_ambiente(obtener("AMBIENTE", int(Ambiente.PRUEBAS)))
 
 
 # --------------------------------------------------------------- resolución

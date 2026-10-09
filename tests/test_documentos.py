@@ -14,6 +14,8 @@ from typing import Any
 import pytest
 from lxml import etree
 
+from django.contrib import admin as _admin
+
 from conftest import RUC, _receptor, _superusuario
 
 HOY = date(2026, 10, 8)
@@ -1529,3 +1531,268 @@ def test_verificar_en_el_sri_actualiza_el_comprobante(documentos, factura, clien
     registro.refresh_from_db()
     assert registro.estado == "AUTORIZADO"
     assert registro.respuesta_autorizacion
+
+
+# ------------------------------------------- filtros y búsquedas en todo el admin
+
+
+#: Filtro de ejemplo para comprobar las rutas «mi_app.MiFiltro» de los ajustes.
+class FiltroConDescripcionCorta(_admin.SimpleListFilter):
+    title = "Descripción"
+    parameter_name = "descripcion_corta"
+
+    def lookups(self, request, model_admin):
+        return (("si", "Descripción corta"), ("no", "Descripción larga"))
+
+    def queryset(self, request, queryset):
+        if self.value() == "si":
+            return queryset.filter(descripcion__len__lte=15)
+        if self.value() == "no":
+            return queryset.filter(descripcion__len__gt=15)
+        return queryset
+
+
+def _campos_sri_fe():
+    """Todos los admins del paquete registrados en este proyecto."""
+    return {
+        modelo: adm
+        for modelo, adm in _admin.site._registry.items()
+        if modelo._meta.app_label == "sri_fe"
+    }
+
+
+def test_todos_los_admins_tienen_filtros_y_busqueda(entorno_django):
+    """El requisito: no debe quedar ningún modelo sin filtros ni búsqueda."""
+    faltan = []
+    for modelo, adm in sorted(_campos_sri_fe().items(), key=lambda par: par[0].__name__):
+        if not adm.get_list_filter(None):
+            faltan.append(f"{modelo.__name__}: sin filtros")
+        if not adm.get_search_fields(None):
+            faltan.append(f"{modelo.__name__}: sin búsqueda")
+
+    assert not faltan, "\n".join(faltan)
+    assert len(_campos_sri_fe()) >= 20      # el paquete trae todo lo modelado
+
+
+def test_los_filtros_y_busquedas_apuntan_a_campos_que_existen(entorno_django):
+    """Un nombre mal escrito no falla al arrancar: falla al abrir el listado."""
+    from django.contrib.admin.utils import get_fields_from_path
+
+    problemas = []
+    for modelo, adm in _campos_sri_fe().items():
+        for campo in adm.get_search_fields(None):
+            try:
+                get_fields_from_path(modelo, campo)
+            except Exception as error:  # noqa: BLE001
+                problemas.append(f"{modelo.__name__} búsqueda «{campo}»: {error}")
+        for filtro in adm.get_list_filter(None):
+            if isinstance(filtro, type):
+                campo = getattr(filtro, "campo", None)
+            else:
+                campo = filtro[0] if isinstance(filtro, (list, tuple)) else filtro
+            if not campo:
+                continue
+            try:
+                get_fields_from_path(modelo, campo)
+            except Exception as error:  # noqa: BLE001
+                problemas.append(f"{modelo.__name__} filtro «{campo}»: {error}")
+        for columna in adm.get_list_display(None):
+            if not isinstance(columna, str) or hasattr(adm, columna):
+                continue
+            if hasattr(modelo, columna):
+                continue
+            try:
+                get_fields_from_path(modelo, columna)
+            except Exception as error:  # noqa: BLE001
+                problemas.append(f"{modelo.__name__} columna «{columna}»: {error}")
+
+    assert not problemas, "\n".join(problemas)
+
+
+@pytest.mark.parametrize(
+    "ruta",
+    [
+        "/admin/sri_fe/cliente/",
+        "/admin/sri_fe/producto/",
+        "/admin/sri_fe/factura/",
+        "/admin/sri_fe/liquidacioncompra/",
+        "/admin/sri_fe/notacredito/",
+        "/admin/sri_fe/notadebito/",
+        "/admin/sri_fe/guiaremision/",
+        "/admin/sri_fe/retencion/",
+        "/admin/sri_fe/guiadestinatario/",
+        "/admin/sri_fe/retenciondocsustento/",
+        "/admin/sri_fe/comprobanteemitido/",
+        "/admin/sri_fe/secuencial/",
+        "/admin/sri_fe/facturadetalle/",
+        "/admin/sri_fe/liquidacioncompradetalle/",
+        "/admin/sri_fe/notacreditodetalle/",
+        "/admin/sri_fe/guiadetalle/",
+        "/admin/sri_fe/notadebitomotivo/",
+        "/admin/sri_fe/retencionimpuesto/",
+        "/admin/sri_fe/retenciondocsustentoimpuesto/",
+        "/admin/sri_fe/configuracionemisor/",
+    ],
+)
+def test_los_listados_con_filtros_y_busqueda_responden(admin_cliente, ruta):
+    """Todos los listados, con su barra de filtros y su buscador, abren bien."""
+    respuesta = admin_cliente.get(ruta)
+
+    assert respuesta.status_code == 200, respuesta.status_code
+    contenido = respuesta.content.decode()
+    assert 'id="searchbar"' in contenido          # buscador
+    assert "changelist-filter" in contenido       # barra de filtros
+
+
+def test_se_puede_filtrar_y_buscar_de_verdad(admin_cliente, factura, cliente_falso):
+    factura.emitir(encolar=False)
+
+    # Buscar por la razón social del receptor…
+    respuesta = admin_cliente.get("/admin/sri_fe/factura/", {"q": "DISTRIBUIDORA"})
+    assert "DISTRIBUIDORA ANDINA" in respuesta.content.decode()
+
+    # …por su identificación, y filtrar por el estado del comprobante.
+    assert "DISTRIBUIDORA ANDINA" in admin_cliente.get(
+        "/admin/sri_fe/factura/", {"q": "1790012345001"}
+    ).content.decode()
+    assert "DISTRIBUIDORA ANDINA" in admin_cliente.get(
+        "/admin/sri_fe/factura/", {"comprobante__estado": "AUTORIZADO"}
+    ).content.decode()
+    assert "DISTRIBUIDORA ANDINA" not in admin_cliente.get(
+        "/admin/sri_fe/factura/", {"comprobante__estado": "DEVUELTO"}
+    ).content.decode()
+
+
+def test_los_filtros_propios_del_paquete_funcionan(admin_cliente, factura, cliente_falso):
+    """Rango de fechas, rango de importes y emitidos / sin emitir."""
+    from factec.django import admin_filtros
+
+    factura.emitir(encolar=False)
+
+    def aparece(parametros: dict) -> bool:
+        respuesta = admin_cliente.get("/admin/sri_fe/factura/", parametros)
+        assert respuesta.status_code == 200
+        return "DISTRIBUIDORA ANDINA" in respuesta.content.decode()
+
+    # Emitidos / sin emitir
+    assert aparece({"emitido_comprobante": "si"})
+    assert not aparece({"emitido_comprobante": "no"})
+
+    # Rango de importes (la factura suma 280)
+    assert aparece({"importe_comprobante_importe_total": "100_500"})
+    assert not aparece({"importe_comprobante_importe_total": "0_10"})
+
+    # Fechas: hoy (el fixture emite con la fecha de hoy) y un rango vacío
+    assert aparece({"rango_fecha_emision": "hoy"})
+    assert not aparece({"rango_fecha_emision": "sin_fecha"})
+    assert not aparece({"rango_fecha_emision": "mes_pasado"})
+
+    # Y las clases de filtro resuelven sus consultas
+    assert admin_filtros.filtro_por_fecha("creado").parameter_name == "rango_creado"
+    assert admin_filtros.filtro_emitido().parameter_name == "emitido_comprobante"
+
+
+def test_se_puede_buscar_una_linea_en_todos_los_comprobantes(admin_cliente, factura,
+                                                            cliente_falso):
+    """El listado de líneas responde «¿en qué comprobantes vendí esto?»."""
+    factura.emitir(encolar=False)
+
+    respuesta = admin_cliente.get("/admin/sri_fe/facturadetalle/", {"q": "Soporte mensual"})
+    contenido = respuesta.content.decode()
+
+    assert respuesta.status_code == 200
+    assert "Soporte mensual" in contenido
+    # Enlace al comprobante del que es la línea
+    assert f"/admin/sri_fe/factura/{factura.pk}/change/" in contenido
+
+    # Buscar por el producto: sale la línea que lo lleva…
+    por_producto = admin_cliente.get(
+        "/admin/sri_fe/facturadetalle/", {"q": "SRV001"}
+    ).content.decode()
+    assert "Servicio de desarrollo" in por_producto
+    assert "Soporte mensual" not in por_producto
+
+    # …y buscar por el cliente: salen todas las líneas de sus comprobantes.
+    por_cliente = admin_cliente.get(
+        "/admin/sri_fe/facturadetalle/", {"q": "DISTRIBUIDORA"}
+    ).content.decode()
+    assert "Servicio de desarrollo" in por_cliente
+    assert "Soporte mensual" in por_cliente
+
+
+def test_los_filtros_y_busquedas_se_configuran_desde_los_ajustes(entorno_django):
+    """Dinámico: la tienda añade filtros, búsquedas y columnas sin tocar el paquete."""
+    from django.test import override_settings
+
+    from factec.django import admin as admin_paquete  # noqa: F401  (registra los admins)
+    from factec.django import admin_filtros, documentos
+
+    ajustes = {
+        "CLAVE_CIFRADO": "x" * 44,
+        "ADMIN": {
+            "factura": {
+                "filtros": ["forma_pago", admin_filtros.filtro_por_fecha("creado", "Alta")],
+                "busqueda": ["observaciones", "receptor__email"],
+                "columnas": ["observaciones"],
+                "solo_lectura": ["observaciones"],
+            },
+            "producto": {
+                "solo": True,                       # reemplaza lo que trae el paquete
+                "filtros": ["activo"],
+                "busqueda": ["descripcion"],
+            },
+        },
+    }
+
+    with override_settings(FACTURACION_ELECTRONICA=ajustes):
+        admin_factura = _admin.site._registry[documentos.Factura]
+        filtros = admin_factura.get_list_filter(None)
+        busqueda = admin_factura.get_search_fields(None)
+        columnas = admin_factura.get_list_display(None)
+
+        assert "forma_pago" in filtros
+        assert any(getattr(f, "parameter_name", "") == "rango_creado" for f in filtros)
+        assert "receptor__email" in busqueda and "observaciones" in busqueda
+        assert "comprobante__clave_acceso" in busqueda      # lo del paquete se conserva
+        assert "observaciones" in columnas
+        assert "observaciones" in admin_factura.get_readonly_fields(None)
+
+        # ``solo`` deja únicamente lo indicado
+        admin_producto = _admin.site._registry[documentos.Producto]
+        assert admin_producto.get_list_filter(None) == ["activo"]
+        assert admin_producto.get_search_fields(None) == ["descripcion"]
+
+
+def test_los_ajustes_admiten_rutas_de_texto(entorno_django):
+    """Se puede indicar el filtro con su ruta («modulo.Clase») en los ajustes."""
+    from django.test import override_settings
+
+    from factec.django import admin_filtros, documentos
+
+    ajustes = {
+        "CLAVE_CIFRADO": "x" * 44,
+        "ADMIN": {"producto": {"filtros": ["test_documentos.FiltroConDescripcionCorta"]}},
+    }
+
+    with override_settings(FACTURACION_ELECTRONICA=ajustes):
+        admin_producto = _admin.site._registry[documentos.Producto]
+
+        assert FiltroConDescripcionCorta in admin_producto.get_list_filter(None)
+
+
+def test_una_ruta_mala_en_los_ajustes_no_rompe_el_admin(entorno_django, caplog):
+    """Si la ruta no existe, se avisa y se sigue con los filtros del paquete."""
+    from django.test import override_settings
+
+    from factec.django import admin_filtros, documentos
+
+    ajustes = {
+        "CLAVE_CIFRADO": "x" * 44,
+        "ADMIN": {"producto": {"filtros": ["no.existe.EsteFiltro"]}},
+    }
+
+    with override_settings(FACTURACION_ELECTRONICA=ajustes):
+        admin_producto = _admin.site._registry[documentos.Producto]
+        filtros = admin_producto.get_list_filter(None)
+
+    assert "activo" in filtros          # siguen los del paquete

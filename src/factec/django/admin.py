@@ -10,6 +10,13 @@ from django.utils.html import format_html, format_html_join
 
 from ..excepciones import ErrorFacturacion
 from . import archivos, conf, models, services, sri_datos
+from .admin_filtros import (
+    AdminConAjustes,
+    FiltroConCertificado,
+    filtro_emitido,
+    filtro_por_fecha,
+    filtro_por_importe,
+)
 from .admin_documentos import *  # noqa: F401,F403  (registra los comprobantes)
 from .forms import ConfiguracionEmisorForm
 
@@ -17,7 +24,7 @@ __all__ = ["ConfiguracionEmisorAdmin", "ComprobanteEmitidoAdmin", "SecuencialAdm
 
 
 @admin.register(models.ConfiguracionEmisor)
-class ConfiguracionEmisorAdmin(admin.ModelAdmin):
+class ConfiguracionEmisorAdmin(AdminConAjustes):
     """Datos del contribuyente y carga del archivo de firma.
 
     Al guardar se abre el ``.p12`` para comprobar la contraseña, la vigencia y que
@@ -29,8 +36,21 @@ class ConfiguracionEmisorAdmin(admin.ModelAdmin):
         "nombre", "ruc", "razon_social", "ambiente", "serie",
         "regimen_mostrado", "firma_estado", "activo",
     )
-    list_filter = ("activo", "ambiente", "obligado_contabilidad")
-    search_fields = ("nombre", "ruc", "razon_social", "nombre_comercial")
+    list_filter = (
+        "activo",
+        "ambiente",
+        "obligado_contabilidad",
+        "regimen",
+        "categoria",
+        FiltroConCertificado,
+        filtro_por_fecha("creado", "Alta"),
+    )
+    search_fields = (
+        "nombre", "ruc", "razon_social", "nombre_comercial", "dir_matriz",
+        "dir_establecimiento", "estab", "pto_emi", "certificado",
+        "contribuyente_especial", "agente_retencion", "regimen", "categoria",
+    )
+    list_per_page = 50
     fieldsets = (
         ("Identificación", {
             "fields": ("nombre", "activo", "ambiente"),
@@ -200,7 +220,7 @@ class ConfiguracionEmisorAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.ComprobanteEmitido)
-class ComprobanteEmitidoAdmin(admin.ModelAdmin):
+class ComprobanteEmitidoAdmin(AdminConAjustes):
     """Listado y detalle de los comprobantes emitidos."""
 
     list_display = (
@@ -209,12 +229,24 @@ class ComprobanteEmitidoAdmin(admin.ModelAdmin):
         "numero_autorizacion", "documento_origen", "archivos_enlazados", "creado",
     )
     list_select_related = ("content_type",)
-    list_filter = ("estado", "tipo_comprobante", "ambiente", "fecha_emision")
+    list_filter = (
+        "estado",
+        "tipo_comprobante",
+        "ambiente",
+        "tipo_emision",
+        "configuracion",
+        filtro_por_fecha("fecha_emision", "Fecha de emisión"),
+        filtro_por_fecha("fecha_autorizacion", "Fecha de autorización"),
+        filtro_por_fecha("creado", "Alta"),
+        filtro_por_importe("importe_total", "Importe"),
+    )
     search_fields = (
         "clave_acceso", "numero_autorizacion", "razon_social_receptor",
-        "identificacion_receptor", "secuencial",
+        "identificacion_receptor", "secuencial", "estab", "pto_emi",
+        "carpeta", "error", "mensajes", "configuracion__nombre",
+        "configuracion__ruc", "configuracion__razon_social",
     )
-    date_hierarchy = "creado"
+    date_hierarchy = "fecha_emision"
     ordering = ("-creado",)
     actions = ("accion_emitir", "accion_consultar_autorizacion")
     list_per_page = 50
@@ -424,9 +456,28 @@ class ComprobanteEmitidoAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.Secuencial)
-class SecuencialAdmin(admin.ModelAdmin):
+class SecuencialAdmin(AdminConAjustes):
     """Contadores de secuenciales por tipo, establecimiento y ambiente."""
 
-    list_display = ("tipo_comprobante", "estab", "pto_emi", "ambiente", "ultimo", "actualizado")
-    list_filter = ("tipo_comprobante", "ambiente")
+    list_display = (
+        "tipo_comprobante", "estab", "pto_emi", "ambiente", "serie",
+        "ultimo", "siguiente_mostrado", "actualizado",
+    )
+    list_filter = (
+        "tipo_comprobante",
+        "ambiente",
+        "estab",
+        "pto_emi",
+        filtro_por_fecha("actualizado", "Último cambio"),
+    )
+    search_fields = ("tipo_comprobante", "estab", "pto_emi", "ultimo")
     ordering = ("tipo_comprobante", "estab", "pto_emi")
+    list_per_page = 50
+
+    @admin.display(description="Serie")
+    def serie(self, obj: models.Secuencial) -> str:
+        return f"{obj.estab}-{obj.pto_emi}"
+
+    @admin.display(description="Siguiente")
+    def siguiente_mostrado(self, obj: models.Secuencial) -> int:
+        return obj.ultimo + 1

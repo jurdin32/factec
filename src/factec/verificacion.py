@@ -202,7 +202,7 @@ def verificar_en_el_sri(
     if cliente is None:
         from .sri.soap import ClienteSRI
 
-        cliente = ClienteSRI(ambiente=int(getattr(ambiente, "value", ambiente)))
+        cliente = ClienteSRI(ambiente=leer_ambiente(ambiente))
 
     respuesta = cliente.autorizar(str(clave_acceso).strip())
     if not respuesta.autorizaciones:

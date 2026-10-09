@@ -51,6 +51,30 @@ Eso crea las tablas de la app (usa el *label* `sri_fe`):
 No hay que generar migraciones en el proyecto: vienen dentro del paquete, así que
 `migrate` deja la base de datos lista.
 
+#### El ambiente: «pruebas» o «producción»
+
+El ajuste `AMBIENTE` es solo un respaldo (el que manda es el ambiente de la
+configuración del emisor, que se elige en el admin). Se puede escribir el nombre
+en lugar del número, que es más difícil de equivocar:
+
+```python
+FACTURACION_ELECTRONICA = {
+    "AMBIENTE": "pruebas",     # 1: comprobantes sin validez fiscal
+    # "AMBIENTE": "producción",  # 2: comprobantes con validez legal
+}
+```
+
+Se admiten `pruebas` (o `prueba`, `test`, `testing`, `sandbox`, `certificación`, y
+el número `1`) y `producción` (o `produccion`, `prod`, `production`, `real`, y el
+número `2`). Con cualquier otra cosa, el paquete lo dice al arrancar:
+
+```
+factec.excepciones.ErrorValidacion: Ambiente desconocido: 'producion'.
+Use «pruebas» o «producción» (o 1 y 2).
+```
+
+Lo mismo vale en la línea de comandos: `sri-fe autorizar <clave> --ambiente producción`.
+
 #### Ponga la zona horaria de Ecuador
 
 ```python
@@ -473,6 +497,65 @@ python manage.py archivar_comprobantes                        # todos
 python manage.py archivar_comprobantes --desde 2026-10-01     # desde una fecha
 python manage.py archivar_comprobantes --estado DEVUELTO      # solo los devueltos
 python manage.py archivar_comprobantes --simular              # ver sin escribir
+```
+
+### Filtros y búsquedas
+
+Todos los listados del admin vienen con filtros y buscador, y se pueden ampliar
+desde `settings` sin tocar el paquete: en cada petición se leen los ajustes
+`ADMIN` y se añaden (o se reemplazan, con `solo`) los filtros, búsquedas,
+columnas y campos de solo lectura que indique.
+
+| Modelo | Filtros de serie | Búsqueda por |
+|---|---|---|
+| `Factura`, `LiquidacionCompra`, `NotaCredito`, `NotaDebito` | Estado ante el SRI, emitidos/sin emitir, ambiente, fecha de emisión, fecha de autorización, importe, forma de pago, tipo de identificación de la contraparte… | Serie y secuencial, clave de acceso, número de autorización, razón social e identificación, correo, dirección, motivo, número del documento modificado… |
+| `GuiaRemision` | Estado, fechas de emisión e inicio del traslado, placa, tipo de identificación del transportista | Transportista, placa, punto de partida, destinatarios |
+| `Retencion` | Estado, período fiscal, parte relacionada, tipo de sujeto retenido | Sujeto retenido, documentos sustento, códigos de retención |
+| `GuiaDestinatario` | Motivo de traslado, tipo de identificación, documento que sustenta, fecha del sustento | Destinatario, ruta, número y autorización del sustento, bienes |
+| `RetencionDocSustento` | Documento y código de sustento, pago local/exterior, convenio de doble tributación, rango de fechas e importes | Números de documento y autorización, sujeto retenido, retenciones e impuestos |
+| `Cliente` | Tipo de identificación, fecha de alta | Razón social, identificación, correo, teléfono, dirección |
+| `Producto` | Activo, IVA, unidad de medida, fecha de alta | Código principal y auxiliar, descripción, unidad |
+| `ComprobanteEmitido` | Estado, tipo, ambiente, tipo de emisión, configuración, rangos de fechas e importes | Clave, autorización, receptor, secuencial, carpeta, mensajes y error |
+| `ConfiguracionEmisor` | Activo, ambiente, obligado a contabilidad, régimen, categoría, firma cargada, fecha de alta | RUC, razón social, direcciones, serie, certificado, resoluciones |
+| **Líneas** (`FacturaDetalle`, `LiquidacionCompraDetalle`, `NotaCreditoDetalle`, `GuiaDetalle`) | Fecha y estado del comprobante, IVA, importe, tipo de identificación de la contraparte | Descripción, códigos, datos adicionales, producto, cliente/proveedor, secuencial y clave del comprobante |
+| `RetencionImpuesto`, `RetencionDocSustentoImpuesto`, `NotaDebitoMotivo` | Código y porcentaje, estado y fecha de la nota | Códigos de retención, base, documento sustento, sujeto retenido |
+
+Las líneas se registran aparte justamente para eso: buscar en un solo sitio en qué
+comprobantes aparece un producto, un código o un cliente.
+
+```python
+FACTURACION_ELECTRONICA = {
+    "ADMIN": {
+        "_todos": {"filtros": ["mi_app.filtros.PorSucursal"]},   # para todos
+        "factura": {
+            "filtros": ["receptor__tipo_identificacion", "mi_app.filtros.PorSucursal"],
+            "busqueda": ["receptor__direccion", "detalles__descripcion"],
+            "columnas": ["mi_app.admin.columna_sucursal"],
+            "solo_lectura": ["observaciones"],
+        },
+        "producto": {"solo": True, "filtros": ["activo"], "busqueda": ["descripcion"]},
+    },
+}
+```
+
+Las entradas son el nombre de un campo, la ruta a un filtro del proyecto
+(`"mi_app.filtros.MiFiltro"`, una subclase de `SimpleListFilter`) o, en las
+columnas, la ruta a una función. El paquete trae filtros reutilizables por si
+quiere usarlos en sus propios admins:
+
+```python
+from factec.django.admin_filtros import (
+    AdminConAjustes, FiltroConCertificado, filtro_emitido, filtro_por_fecha,
+    filtro_por_importe,
+)
+
+class MiFacturaAdmin(AdminConAjustes):
+    list_filter = (
+        filtro_por_fecha("fecha_emision", "Emitidas"),
+        filtro_por_importe("importe_total", "Importe"),
+        filtro_emitido("comprobante"),
+    )
+    search_fields = ("secuencial", "receptor__razon_social")
 ```
 
 ### Leer y verificar desde una vista

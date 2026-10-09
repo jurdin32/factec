@@ -166,6 +166,13 @@ class Cliente(models.Model):
         "dirección", max_length=300, blank=True,
         help_text="Opcional para el SRI, pero es la que sale impresa en el comprobante.",
     )
+    email = models.EmailField(
+        "correo electrónico", blank=True,
+        help_text="Para enviarle el comprobante. El SRI no lo pide.",
+    )
+    telefono = models.CharField("teléfono", max_length=20, blank=True)
+    creado = models.DateTimeField("creado", auto_now_add=True, null=True)
+    actualizado = models.DateTimeField("actualizado", auto_now=True, null=True)
 
     class Meta:
         verbose_name = "cliente"
@@ -260,6 +267,8 @@ class Producto(models.Model):
     activo = models.BooleanField(
         "activo", default=True, help_text="No afecta al XML: sirve para no ofrecerlo más."
     )
+    creado = models.DateTimeField("creado", auto_now_add=True, null=True)
+    actualizado = models.DateTimeField("actualizado", auto_now=True, null=True)
 
     class Meta:
         verbose_name = "producto"

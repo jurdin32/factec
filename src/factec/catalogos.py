@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 from enum import IntEnum, Enum
+
+from .excepciones import ErrorValidacion
 from typing import Dict, Tuple
 
 
@@ -58,6 +60,9 @@ __all__ = [
     "DESCRIPCION_TARIFA_IVA",
     "DESCRIPCION_MOTIVO_TRASLADO",
     "DESCRIPCION_TIPO_COMPROBANTE",
+    "NOMBRES_AMBIENTE",
+    "DESCRIPCION_AMBIENTE",
+    "leer_ambiente",
     "PORCENTAJE_IVA",
     "PORCENTAJE_RETENCION_IVA",
     "codigo_documento",
@@ -65,7 +70,11 @@ __all__ = [
 
 
 class Ambiente(_EnumEntero):
-    """Ambiente de emisión (SRI, tabla 4)."""
+    """Ambiente de emisión (SRI, tabla 4).
+
+    * ``1`` — **Pruebas**: comprobantes sin validez fiscal, para ensayar.
+    * ``2`` — **Producción**: comprobantes con validez legal ante el SRI.
+    """
 
     PRUEBAS = 1
     PRODUCCION = 2
@@ -245,6 +254,68 @@ DESCRIPCION_MOTIVO_TRASLADO: Dict[str, str] = {
     MotivoTraslado.IMPORTACION.value: "Importación",
     MotivoTraslado.OTROS.value: "Otros",
 }
+
+#: Nombres con los que se puede escribir el ambiente en lugar del número.
+NOMBRES_AMBIENTE: Dict[str, int] = {
+    "1": int(Ambiente.PRUEBAS),
+    "pruebas": int(Ambiente.PRUEBAS),
+    "prueba": int(Ambiente.PRUEBAS),
+    "test": int(Ambiente.PRUEBAS),
+    "testing": int(Ambiente.PRUEBAS),
+    "sandbox": int(Ambiente.PRUEBAS),
+    "certificacion": int(Ambiente.PRUEBAS),
+    "certificación": int(Ambiente.PRUEBAS),
+    "2": int(Ambiente.PRODUCCION),
+    "produccion": int(Ambiente.PRODUCCION),
+    "producción": int(Ambiente.PRODUCCION),
+    "prod": int(Ambiente.PRODUCCION),
+    "production": int(Ambiente.PRODUCCION),
+    "real": int(Ambiente.PRODUCCION),
+}
+
+#: Cómo se muestra cada ambiente (para mensajes y ayuda del admin).
+DESCRIPCION_AMBIENTE: Dict[int, str] = {
+    int(Ambiente.PRUEBAS): "Pruebas (1) — sin validez fiscal, para ensayar",
+    int(Ambiente.PRODUCCION): "Producción (2) — con validez legal ante el SRI",
+}
+
+
+def leer_ambiente(valor: Any) -> int:
+    """Interpreta el ambiente: acepta el número o su nombre.
+
+    Sirve para escribir ``AMBIENTE: "pruebas"`` (o ``"producción"``, ``"test"``,
+    ``1``…) en lugar de tener que recordar el número. Lanza
+    :class:`~factec.excepciones.ErrorValidacion` con la lista de nombres válidos si
+    no se entiende.
+    """
+    if isinstance(valor, Ambiente) or isinstance(valor, bool):
+        return int(valor)
+    if valor is None:
+        raise ErrorValidacion(
+            "Falta el ambiente: use «pruebas» (1) o «producción» (2)."
+        )
+    if isinstance(valor, int):
+        numero = int(valor)
+    elif isinstance(valor, str):
+        texto = valor.strip().lower()
+        if texto in NOMBRES_AMBIENTE:
+            return NOMBRES_AMBIENTE[texto]
+        if texto.isdigit():
+            numero = int(texto)
+        else:
+            raise ErrorValidacion(
+                f"Ambiente desconocido: {valor!r}. Use «pruebas» o «producción» "
+                f"(o 1 y 2)."
+            )
+    else:
+        numero = int(getattr(valor, "value", valor))
+
+    if numero not in DESCRIPCION_AMBIENTE:
+        raise ErrorValidacion(
+            f"Ambiente inválido: {valor!r}. Use «pruebas» (1) o «producción» (2)."
+        )
+    return numero
+
 
 DESCRIPCION_TIPO_COMPROBANTE: Dict[str, str] = {
     TipoComprobante.FACTURA.value: "Factura",

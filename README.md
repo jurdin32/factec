@@ -73,8 +73,14 @@ FACTURACION_ELECTRONICA = {
     # Cifra la contraseña del .p12. Genere la suya:
     #   python -c "from factec.django.crypto import generar_clave; print(generar_clave())"
     "CLAVE_CIFRADO": "ponga-aquí-su-clave",
-    "AMBIENTE": 1,            # 1 = pruebas, 2 = producción (respaldo del admin)
-    "GUARDAR_XML": True,      # guarda los XML en la base de datos
+
+    # El ambiente se puede escribir con su nombre (o con el número):
+    #   "pruebas"     → 1: comprobantes sin validez fiscal, para ensayar
+    #   "producción"  → 2: comprobantes con validez legal ante el SRI
+    # Es solo el respaldo: manda el ambiente de la configuración del emisor.
+    "AMBIENTE": "pruebas",
+
+    "GUARDAR_XML": True,       # guarda los XML en la base de datos
     "GUARDAR_ARCHIVOS": True,  # además, los XML y las respuestas como archivos
 }
 
@@ -229,6 +235,35 @@ resultado = emisor.emitir(factura)
 
 ---
 
+## Filtros y búsquedas en el admin
+
+**Todos** los listados del paquete traen filtros y buscador: los comprobantes (por
+estado ante el SRI, ambiente, forma de pago, rango de fechas y de importes),
+los catálogos (tipo de identificación, IVA, unidad, activo…), los destinatarios
+de guía, los documentos sustento, las retenciones y hasta las **líneas**, para
+responder «¿en qué comprobantes vendí este producto?».
+
+Y se puede ampliar sin tocar el paquete, desde `settings`:
+
+```python
+FACTURACION_ELECTRONICA = {
+    "ADMIN": {
+        # para todos los modelos
+        "_todos": {"filtros": ["mi_app.filtros.PorSucursal"]},
+        "factura": {
+            "filtros": ["receptor__tipo_identificacion", "mi_app.filtros.PorSucursal"],
+            "busqueda": ["receptor__direccion", "detalles__descripcion"],
+            "columnas": ["mi_app.admin.columna_sucursal"],
+            "solo_lectura": ["observaciones"],
+        },
+        # «solo» reemplaza los filtros y búsquedas del paquete en ese modelo
+        "producto": {"solo": True, "filtros": ["activo"], "busqueda": ["descripcion"]},
+    },
+}
+```
+
+---
+
 ## Leer y verificar comprobantes
 
 Sirve para sus comprobantes y para los que le entreguen (por ejemplo, las
@@ -292,7 +327,7 @@ informe.certificado.nombre, informe.certificado.vencido()
 | [docs/django.md](docs/django.md) | La app de Django: modelos, admin, adaptadores, Celery y ajustes |
 | [docs/prueba-real.md](docs/prueba-real.md) | Emitir de verdad contra el ambiente de pruebas del SRI |
 | [examples/](examples/) | Scripts listos para ejecutar |
-| [tests/](tests/) | 417 pruebas, incluida la validación contra los XSD oficiales |
+| [tests/](tests/) | 450 pruebas, incluida la validación contra los XSD oficiales |
 
 ---
 

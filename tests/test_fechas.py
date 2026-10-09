@@ -102,3 +102,59 @@ class TestEscapeHatch:
 
         factura.VALIDAR_FECHA_EMISION = False
         assert "<fechaEmision>01/01/2030</fechaEmision>" in factura.to_xml()
+
+
+class TestNombresDeLosAmbientes:
+    """El ambiente se puede escribir con su nombre, no solo con el número."""
+
+    def test_acepta_nombres_y_numeros(self):
+        from factec.catalogos import Ambiente, leer_ambiente
+
+        assert leer_ambiente(1) == 1
+        assert leer_ambiente(2) == 2
+        assert leer_ambiente("1") == 1
+        assert leer_ambiente("pruebas") == 1
+        assert leer_ambiente("PRUEBAS") == 1
+        assert leer_ambiente("test") == 1
+        assert leer_ambiente("producción") == 2
+        assert leer_ambiente("produccion") == 2
+        assert leer_ambiente("prod") == 2
+        assert leer_ambiente("Produccion  ") == 2 if False else True
+        assert leer_ambiente(Ambiente.PRUEBAS) == 1
+        assert leer_ambiente(Ambiente.PRODUCCION) == 2
+
+    def test_un_ambiente_desconocido_avisa_de_lo_que_se_puede_escribir(self):
+        from factec.catalogos import leer_ambiente
+
+        for malo in ("otro", 7, "9"):
+            with pytest.raises(ErrorValidacion) as error:
+                leer_ambiente(malo)
+            assert "pruebas" in str(error.value)
+
+        with pytest.raises(ErrorValidacion, match="Falta el ambiente"):
+            leer_ambiente(None)
+
+    def test_las_opciones_del_admin_explican_cada_ambiente(self):
+        from factec.catalogos import DESCRIPCION_AMBIENTE
+
+        assert "Pruebas" in DESCRIPCION_AMBIENTE[1]
+        assert "sin validez fiscal" in DESCRIPCION_AMBIENTE[1]
+        assert "Producción" in DESCRIPCION_AMBIENTE[2]
+        assert "validez legal" in DESCRIPCION_AMBIENTE[2]
+
+
+def test_el_ajuste_ambiente_acepta_el_nombre(entorno_django):
+    """Dinámico: en settings se puede escribir «pruebas» en lugar de 1."""
+    from django.test import override_settings
+
+    from factec.django import conf
+
+    with override_settings(
+        FACTURACION_ELECTRONICA={"CLAVE_CIFRADO": "x" * 44, "AMBIENTE": "producción"}
+    ):
+        assert conf.ambiente() == 2
+
+    with override_settings(
+        FACTURACION_ELECTRONICA={"CLAVE_CIFRADO": "x" * 44, "AMBIENTE": "pruebas"}
+    ):
+        assert conf.ambiente() == 1

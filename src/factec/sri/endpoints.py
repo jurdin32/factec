@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from ..catalogos import Ambiente
+from ..catalogos import Ambiente, leer_ambiente
 
 __all__ = [
     "HOSTS",
@@ -48,10 +48,7 @@ AMBIENTES: Dict[int, str] = {1: "pruebas", 2: "producción"}
 
 def host_ambiente(ambiente: object) -> str:
     """Devuelve el host del SRI para el ambiente indicado (1 o 2)."""
-    numero = int(getattr(ambiente, "value", ambiente))
-    if numero not in HOSTS:
-        raise ValueError(f"Ambiente inválido: {ambiente!r}. Use 1 (pruebas) o 2 (producción).")
-    return HOSTS[numero]
+    return HOSTS[leer_ambiente(ambiente)]
 
 
 def url_recepcion(ambiente: object, host: Optional[str] = None) -> str:

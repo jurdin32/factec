@@ -15,6 +15,13 @@ from django.urls import path
 from django.utils.html import format_html, format_html_join
 
 from . import documentos, facturacion, models
+from .admin_filtros import (
+    AdminConAjustes,
+    FiltroConCertificado,
+    filtro_emitido,
+    filtro_por_fecha,
+    filtro_por_importe,
+)
 from .forms import LineaDocumentoForm
 
 __all__ = [
@@ -45,23 +52,56 @@ COLORES_ESTADO = {
 
 
 @admin.register(documentos.Cliente)
-class ClienteAdmin(admin.ModelAdmin):
-    list_display = ("razon_social", "identificacion", "tipo_identificacion", "direccion")
-    list_filter = ("tipo_identificacion",)
-    search_fields = ("razon_social", "identificacion")
+class ClienteAdmin(AdminConAjustes):
+    """Clientes, proveedores y sujetos retenidos."""
+
+    list_display = (
+        "razon_social", "identificacion", "tipo_identificacion", "direccion",
+        "facturas_emitidas", "notas_de_credito_emitidas",
+    )
+    list_filter = ("tipo_identificacion", filtro_por_fecha("creado", "Alta"))
+    search_fields = ("razon_social", "identificacion", "direccion", "email", "telefono")
+    list_per_page = 50
     ordering = ("razon_social",)
+
+    def get_queryset(self, request: Any) -> Any:
+        from django.db.models import Count
+
+        return super().get_queryset(request).annotate(
+            _facturas=Count("facturas", distinct=True),
+            _notas=Count("notas_credito", distinct=True),
+        )
+
+    @admin.display(description="Facturas", ordering="_facturas")
+    def facturas_emitidas(self, obj: Any) -> int:
+        return getattr(obj, "_facturas", 0) or 0
+
+    @admin.display(description="Notas de crédito", ordering="_notas")
+    def notas_de_credito_emitidas(self, obj: Any) -> int:
+        return getattr(obj, "_notas", 0) or 0
 
 
 @admin.register(documentos.Producto)
-class ProductoAdmin(admin.ModelAdmin):
+class ProductoAdmin(AdminConAjustes):
     list_display = (
         "codigo_principal", "descripcion", "unidad_medida",
         "precio_unitario", "codigo_porcentaje_iva", "activo",
     )
-    list_filter = ("activo", "codigo_porcentaje_iva")
-    search_fields = ("codigo_principal", "codigo_auxiliar", "descripcion")
+    list_filter = (
+        "activo",
+        "codigo_porcentaje_iva",
+        "unidad_medida",
+        filtro_por_fecha("creado", "Alta"),
+    )
+    search_fields = ("codigo_principal", "codigo_auxiliar", "descripcion", "unidad_medida")
+    date_hierarchy = "creado"
     list_editable = ("activo",)
+    list_per_page = 50
     ordering = ("descripcion",)
+
+    @admin.display(description="IVA", ordering="codigo_porcentaje_iva")
+    def iva_mostrado(self, obj: Any) -> str:
+        return f"{obj.get_codigo_porcentaje_iva_display()} ({obj.tarifa_iva} %)"
 
     def get_urls(self) -> List[Any]:
         return [
@@ -90,8 +130,12 @@ class ProductoAdmin(admin.ModelAdmin):
 # ------------------------------------------------------------------ auxiliares
 
 
-class DocumentoAdmin(admin.ModelAdmin):
-    """Base del admin de los comprobantes: listado, estado y acciones."""
+class DocumentoAdmin(AdminConAjustes):
+    """Base del admin de los comprobantes: listado, estado y acciones.
+
+    Trae filtros y búsquedas de serie, y acepta los que añada la tienda desde el
+    ajuste ``ADMIN`` (ver :mod:`factec.django.admin_filtros`).
+    """
 
     #: Nombre del campo con la otra parte (receptor, proveedor, sujeto retenido).
     campo_contraparte = "receptor"
@@ -105,12 +149,34 @@ class DocumentoAdmin(admin.ModelAdmin):
     #: Relaciones que conviene traer de una vez para el listado.
     prefetch_relacionado: Tuple[str, ...] = ()
 
+    #: Campos por los que se puede buscar además de los comunes.
+    busqueda_propia: Tuple[str, ...] = ()
+
+    #: Filtros propios del comprobante (además de los comunes).
+    filtros_propios: Tuple[Any, ...] = ()
+
     list_display = (
         "numero", "fecha_emision", "contraparte", "total_mostrado",
         "estado_badge", "numero_autorizacion_mostrado",
     )
-    list_filter = ("comprobante__estado", "fecha_emision")
-    search_fields = ("secuencial", "observaciones", "comprobante__clave_acceso")
+    list_filter = (
+        "comprobante__estado",
+        filtro_emitido("comprobante"),
+        "comprobante__ambiente",
+        filtro_por_fecha("fecha_emision", "Fecha de emisión"),
+        filtro_por_fecha("comprobante__fecha_autorizacion", "Fecha de autorización"),
+        filtro_por_importe("comprobante__importe_total", "Importe"),
+    )
+    search_fields = (
+        "secuencial",
+        "observaciones",
+        "comprobante__clave_acceso",
+        "comprobante__numero_autorizacion",
+        "comprobante__razon_social_receptor",
+        "comprobante__identificacion_receptor",
+        "comprobante__carpeta",
+        "comprobante__error",
+    )
     date_hierarchy = "fecha_emision"
     ordering = ("-fecha_emision", "-pk")
     actions = ("accion_emitir", "accion_reintentar")
@@ -120,6 +186,22 @@ class DocumentoAdmin(admin.ModelAdmin):
         "secuencial", "comprobante", "estado_mostrado", "clave_acceso_mostrada",
         "importes_mostrados", "creado", "actualizado",
     )
+
+    def get_search_fields(self, request: Any) -> List[str]:
+        """Búsqueda común + la propia del comprobante + la que añada la tienda."""
+        base = list(super().get_search_fields(request))
+        for campo in self.busqueda_propia:
+            if campo not in base:
+                base.append(campo)
+        return base
+
+    def get_list_filter(self, request: Any) -> List[Any]:
+        """Filtros comunes + los propios + los que añada la tienda."""
+        base = list(super().get_list_filter(request))
+        for filtro in self.filtros_propios:
+            if filtro not in base:
+                base.append(filtro)
+        return base
 
     def get_queryset(self, request: Any) -> Any:
         consulta = super().get_queryset(request)
@@ -304,9 +386,22 @@ class FacturaAdmin(DocumentoAdmin):
 
     list_select_related = ("receptor", "comprobante")
     prefetch_relacionado = ("detalles",)
-    list_filter = ("comprobante__estado", "fecha_emision", "forma_pago")
-    search_fields = ("secuencial", "receptor__razon_social", "receptor__identificacion",
-                     "comprobante__clave_acceso")
+    filtros_propios = (
+        "forma_pago",
+        "unidad_tiempo",
+        "receptor__tipo_identificacion",
+        filtro_por_fecha("creado", "Alta"),
+    )
+    busqueda_propia = (
+        "receptor__razon_social",
+        "receptor__identificacion",
+        "receptor__email",
+        "receptor__direccion",
+        "forma_pago",
+        "placa",
+        "guia_remision",
+        "propina",
+    )
     autocomplete_fields = ("receptor",)
     inlines = (FacturaDetalleInline,)
     fieldsets = (
@@ -345,9 +440,20 @@ class LiquidacionCompraAdmin(DocumentoAdmin):
     campo_contraparte = "proveedor"
     list_select_related = ("proveedor", "comprobante")
     prefetch_relacionado = ("detalles",)
-    list_filter = ("comprobante__estado", "fecha_emision", "forma_pago")
-    search_fields = ("secuencial", "proveedor__razon_social", "proveedor__identificacion",
-                     "comprobante__clave_acceso")
+    filtros_propios = (
+        "forma_pago",
+        "unidad_tiempo",
+        "proveedor__tipo_identificacion",
+        filtro_por_importe("comprobante__importe_total", "Importe"),
+    )
+    busqueda_propia = (
+        "proveedor__razon_social",
+        "proveedor__identificacion",
+        "proveedor__email",
+        "proveedor__direccion",
+        "correo",
+        "forma_pago",
+    )
     autocomplete_fields = ("proveedor",)
     inlines = (LiquidacionCompraDetalleInline,)
     fieldsets = (
@@ -380,6 +486,20 @@ class NotaCreditoAdmin(DocumentoAdmin):
 
     list_select_related = ("receptor", "comprobante")
     prefetch_relacionado = ("detalles",)
+    filtros_propios = (
+        "cod_doc_modificado",
+        "receptor__tipo_identificacion",
+        filtro_por_fecha("fecha_emision_doc_sustento", "Fecha del documento sustento"),
+    )
+    busqueda_propia = (
+        "receptor__razon_social",
+        "receptor__identificacion",
+        "receptor__email",
+        "motivo",
+        "num_doc_modificado",
+        "cod_doc_modificado",
+        "rise",
+    )
     autocomplete_fields = ("receptor",)
     inlines = (NotaCreditoDetalleInline,)
     fieldsets = (
@@ -416,6 +536,23 @@ class NotaDebitoAdmin(DocumentoAdmin):
 
     list_select_related = ("receptor", "comprobante")
     prefetch_relacionado = ("motivos",)
+    filtros_propios = (
+        "cod_doc_modificado",
+        "codigo_porcentaje_iva",
+        "forma_pago",
+        "unidad_tiempo",
+        "receptor__tipo_identificacion",
+        filtro_por_fecha("fecha_emision_doc_sustento", "Fecha del documento sustento"),
+    )
+    busqueda_propia = (
+        "receptor__razon_social",
+        "receptor__identificacion",
+        "receptor__email",
+        "num_doc_modificado",
+        "cod_doc_modificado",
+        "rise",
+        "motivos__razon",
+    )
     autocomplete_fields = ("receptor",)
     inlines = (NotaDebitoMotivoInline,)
     fieldsets = (
@@ -457,6 +594,19 @@ class GuiaRemisionAdmin(DocumentoAdmin):
 
     campo_total = None
     list_select_related = ("comprobante",)
+    filtros_propios = (
+        "placa",
+        "tipo_identificacion_transportista",
+        filtro_por_fecha("fecha_ini_transporte", "Inicio del traslado"),
+    )
+    busqueda_propia = (
+        "razon_social_transportista",
+        "ruc_transportista",
+        "placa",
+        "dir_partida",
+        "destinatarios__razon_social",
+        "destinatarios__identificacion",
+    )
     inlines = (GuiaDestinatarioInline,)
     fieldsets = (
         ("Emisión", {"fields": ("fecha_emision", "secuencial", "observaciones")}),
@@ -491,15 +641,44 @@ class GuiaDetalleInline(admin.TabularInline):
 
 
 @admin.register(documentos.GuiaDestinatario)
-class GuiaDestinatarioAdmin(admin.ModelAdmin):
+class GuiaDestinatarioAdmin(AdminConAjustes):
     """Destinatarios de las guías, con los bienes que se transportan."""
 
-    list_display = ("razon_social", "identificacion", "motivo_traslado", "guia")
-    list_filter = ("motivo_traslado",)
-    search_fields = ("razon_social", "identificacion", "guia__secuencial")
-    list_select_related = ("guia",)
+    list_display = (
+        "razon_social", "identificacion", "motivo_traslado", "guia",
+        "cod_doc_sustento", "bienes", "estado_de_la_guia",
+    )
+    list_filter = (
+        "motivo_traslado",
+        "tipo_identificacion",
+        "cod_doc_sustento",
+        filtro_por_fecha("fecha_emision_doc_sustento", "Fecha del sustento"),
+    )
+    search_fields = (
+        "razon_social", "identificacion", "direccion", "ruta",
+        "num_doc_sustento", "num_aut_doc_sustento",
+        "guia__secuencial", "guia__dir_partida", "guia__placa",
+        "detalles__descripcion", "detalles__codigo_principal",
+    )
+    list_select_related = ("guia", "guia__comprobante")
     inlines = (GuiaDetalleInline,)
     readonly_fields = ("guia",)
+    list_per_page = 50
+    ordering = ("guia", "pk")
+
+    def get_queryset(self, request: Any) -> Any:
+        from django.db.models import Count
+
+        return super().get_queryset(request).annotate(_bienes=Count("detalles"))
+
+    @admin.display(description="Bienes", ordering="_bienes")
+    def bienes(self, obj: Any) -> int:
+        return getattr(obj, "_bienes", 0) or 0
+
+    @admin.display(description="Estado del SRI")
+    def estado_de_la_guia(self, obj: Any) -> str:
+        comprobante = obj.guia.comprobante if obj.guia_id else None
+        return comprobante.get_estado_display() if comprobante else "Sin emitir"
 
 
 # ----------------------------------------------------- comprobante de retención
@@ -520,7 +699,20 @@ class RetencionAdmin(DocumentoAdmin):
     etiqueta_total = "Total retenido"
     list_select_related = ("sujeto_retenido", "comprobante")
     prefetch_relacionado = ("docs_sustento__retenciones",)
-    list_filter = ("comprobante__estado", "fecha_emision", "parte_rel")
+    filtros_propios = (
+        "parte_rel",
+        "tipo_sujeto_retenido",
+        "sujeto_retenido__tipo_identificacion",
+        filtro_por_fecha("periodo_fiscal", "Período fiscal"),
+    )
+    busqueda_propia = (
+        "sujeto_retenido__razon_social",
+        "sujeto_retenido__identificacion",
+        "sujeto_retenido__email",
+        "docs_sustento__num_doc_sustento",
+        "docs_sustento__num_aut_doc_sustento",
+        "docs_sustento__retenciones__codigo_retencion",
+    )
     autocomplete_fields = ("sujeto_retenido",)
     inlines = (RetencionDocSustentoInline,)
     fieldsets = (
@@ -550,13 +742,235 @@ class RetencionImpuestoInline(admin.TabularInline):
 
 
 @admin.register(documentos.RetencionDocSustento)
-class RetencionDocSustentoAdmin(admin.ModelAdmin):
+class RetencionDocSustentoAdmin(AdminConAjustes):
     """Documentos que sustentan cada retención, con sus impuestos y retenciones."""
 
-    list_display = ("num_doc_sustento", "cod_doc_sustento", "fecha_emision",
-                    "total_sin_impuestos", "importe_total", "retencion")
-    list_filter = ("cod_doc_sustento", "cod_sustento", "fecha_emision")
-    search_fields = ("num_doc_sustento", "num_aut_doc_sustento", "retencion__secuencial")
+    list_display = (
+        "num_doc_sustento", "cod_doc_sustento", "fecha_emision",
+        "total_sin_impuestos", "importe_total", "total_retenciones", "retencion",
+    )
+    list_filter = (
+        "cod_doc_sustento",
+        "cod_sustento",
+        "pago_loc_ext",
+        "aplic_conv_dob_trib",
+        "pag_ext_suj_ret_nor_leg",
+        "tipo_regi",
+        filtro_por_fecha("fecha_emision", "Fecha del sustento"),
+        filtro_por_importe("importe_total", "Importe"),
+    )
+    search_fields = (
+        "num_doc_sustento", "num_aut_doc_sustento", "retencion__secuencial",
+        "retencion__sujeto_retenido__razon_social",
+        "retencion__sujeto_retenido__identificacion",
+        "retenciones__codigo", "retenciones__codigo_retencion",
+        "impuestos__codigo", "impuestos__codigo_porcentaje",
+        "pais_efec_pago", "tipo_regi",
+    )
+    ordering = ("-fecha_emision", "-pk")
+    list_per_page = 50
+
+    def get_queryset(self, request: Any) -> Any:
+        from django.db.models import Count
+
+        return super().get_queryset(request).annotate(_retenciones=Count("retenciones"))
+
     list_select_related = ("retencion",)
     inlines = (RetencionDocSustentoImpuestoInline, RetencionImpuestoInline)
     readonly_fields = ("retencion",)
+
+    @admin.display(description="Retenciones", ordering="_retenciones")
+    def total_retenciones(self, obj: Any) -> int:
+        return getattr(obj, "_retenciones", 0) or 0
+
+
+# ----------------------------------------- líneas y detalles (búsqueda global)
+
+
+class LineaAdminBase(AdminConAjustes):
+    """Listado de líneas de comprobantes, para buscar dentro de todos ellos.
+
+    Sirve para responder preguntas como «¿en qué facturas vendí este producto?» o
+    «¿qué comprobantes llevan este código de barras?».
+    """
+
+    #: Comprobante al que pertenece la línea (para el enlace y los filtros).
+    campo_documento = "factura"
+
+    #: Contraparte del comprobante, para poder buscarla.
+    ruta_contraparte = "factura__receptor"
+
+    list_display = (
+        "documento", "producto", "descripcion", "cantidad", "precio_unitario",
+        "total_linea_mostrado", "iva_mostrado", "codigo_mostrado",
+    )
+    #: La primera columna enlaza al comprobante, así que el enlace para editar la
+    #: línea va en la descripción (Django no admite un enlace dentro de otro).
+    list_display_links = ("descripcion",)
+    #: Los filtros se arman en :meth:`get_list_filter`, porque dependen del
+    #: comprobante al que pertenece la línea (cada subclase cambia el campo).
+    list_filter: Tuple[Any, ...] = ()
+    search_fields = (
+        "descripcion", "codigo_principal", "codigo_auxiliar", "unidad_medida",
+        "datos_adicionales", "producto__codigo_principal", "producto__descripcion",
+    )
+    autocomplete_fields = ("producto",)
+    list_per_page = 50
+    ordering = ("-pk",)
+
+    def get_list_select_related(self, request: Any) -> Tuple[str, ...]:
+        """El comprobante cambia en cada línea, así que se resuelve aquí."""
+        return ("producto", self.campo_documento)
+
+    def get_list_filter(self, request: Any) -> List[Any]:
+        """Filtros de la línea + los que añada la tienda desde los ajustes."""
+        documento = self.campo_documento
+        contraparte = self.ruta_contraparte
+        propios: List[Any] = [
+            filtro_por_fecha(f"{documento}__fecha_emision", "Fecha del comprobante"),
+            "codigo_porcentaje_iva",
+            f"{documento}__comprobante__estado",
+            f"{contraparte}__tipo_identificacion",
+            filtro_por_importe(f"{documento}__comprobante__importe_total", "Importe"),
+        ]
+        # ``super()`` añade los filtros configurados en los ajustes ADMIN.
+        for filtro in super().get_list_filter(request):
+            if filtro not in propios:
+                propios.append(filtro)
+        return propios
+
+    def get_search_fields(self, request: Any) -> List[str]:
+        base = list(super().get_search_fields(request))
+        for campo in (
+            f"{self.ruta_contraparte}__razon_social",
+            f"{self.ruta_contraparte}__identificacion",
+            f"{self.campo_documento}__secuencial",
+            f"{self.campo_documento}__comprobante__clave_acceso",
+        ):
+            if campo not in base:
+                base.append(campo)
+        return base
+
+    @admin.display(description="Comprobante")
+    def documento(self, obj: Any) -> Any:
+        from django.urls import reverse
+        from django.utils.html import format_html
+
+        documento = getattr(obj, self.campo_documento, None)
+        if documento is None:
+            return "—"
+        try:
+            url = reverse(
+                f"admin:sri_fe_{documento._meta.model_name}_change", args=[documento.pk]
+            )
+        except NoReverseMatch:
+            return str(documento)
+        return format_html('<a href="{}">{}</a>', url, documento)
+
+    @admin.display(description="Total")
+    def total_linea_mostrado(self, obj: Any) -> Any:
+        try:
+            return obj.total
+        except Exception:  # noqa: BLE001 - informativo
+            return "—"
+
+    @admin.display(description="IVA")
+    def iva_mostrado(self, obj: Any) -> str:
+        return obj.get_codigo_porcentaje_iva_display()
+
+    @admin.display(description="Código")
+    def codigo_mostrado(self, obj: Any) -> str:
+        if obj.codigo_auxiliar:
+            return f"{obj.codigo_principal} / {obj.codigo_auxiliar}"
+        return obj.codigo_principal or "—"
+
+
+def _admin_de_linea(nombre: str, modelo: Any, campo_documento: str, contraparte: str) -> None:
+    """Registra el admin de una línea con el comprobante y la contraparte correctos."""
+    clase = type(
+        nombre,
+        (LineaAdminBase,),
+        {
+            "campo_documento": campo_documento,
+            "ruta_contraparte": contraparte,
+            "__module__": __name__,
+        },
+    )
+    admin.site.register(modelo, clase)
+
+
+_admin_de_linea("FacturaDetalleAdmin", documentos.FacturaDetalle, "factura", "factura__receptor")
+_admin_de_linea(
+    "LiquidacionCompraDetalleAdmin", documentos.LiquidacionCompraDetalle,
+    "liquidacion", "liquidacion__proveedor",
+)
+_admin_de_linea(
+    "NotaCreditoDetalleAdmin", documentos.NotaCreditoDetalle,
+    "nota_credito", "nota_credito__receptor",
+)
+
+
+@admin.register(documentos.GuiaDetalle)
+class GuiaDetalleAdmin(AdminConAjustes):
+    """Bienes transportados en las guías."""
+
+    list_display = ("destinatario", "descripcion", "cantidad", "codigo_principal",
+                    "codigo_adicional", "datos_adicionales")
+    list_filter = ("destinatario__motivo_traslado",)
+    search_fields = (
+        "descripcion", "codigo_principal", "codigo_adicional",
+        "destinatario__razon_social", "destinatario__identificacion",
+        "destinatario__guia__secuencial", "destinatario__guia__placa",
+    )
+    list_select_related = ("destinatario",)
+    list_per_page = 50
+    ordering = ("destinatario", "pk")
+
+
+@admin.register(documentos.NotaDebitoMotivo)
+class NotaDebitoMotivoAdmin(AdminConAjustes):
+    """Motivos de las notas de débito."""
+
+    list_display = ("razon", "valor", "nota_debito")
+    list_filter = ("nota_debito__comprobante__estado",
+                   filtro_por_fecha("nota_debito__fecha_emision", "Fecha de la nota"))
+    search_fields = ("razon", "valor", "nota_debito__secuencial",
+                     "nota_debito__receptor__razon_social",
+                     "nota_debito__receptor__identificacion",
+                     "nota_debito__comprobante__clave_acceso")
+    list_select_related = ("nota_debito",)
+    list_per_page = 50
+    ordering = ("nota_debito", "pk")
+
+
+@admin.register(documentos.RetencionImpuesto)
+class RetencionImpuestoAdmin(AdminConAjustes):
+    """Impuestos retenidos (renta, IVA, ISD…) de cada documento sustento."""
+
+    list_display = ("codigo_retencion", "codigo", "base_imponible", "porcentaje_retener",
+                    "valor_retenido", "doc_sustento")
+    list_filter = ("codigo", "codigo_retencion", "porcentaje_retener",
+                   "doc_sustento__cod_sustento")
+    search_fields = (
+        "codigo_retencion", "codigo", "porcentaje_retener",
+        "doc_sustento__num_doc_sustento",
+        "doc_sustento__retencion__secuencial",
+        "doc_sustento__retencion__sujeto_retenido__razon_social",
+        "doc_sustento__retencion__sujeto_retenido__identificacion",
+    )
+    list_select_related = ("doc_sustento",)
+    list_per_page = 50
+    ordering = ("-pk",)
+
+
+@admin.register(documentos.RetencionDocSustentoImpuesto)
+class RetencionDocSustentoImpuestoAdmin(AdminConAjustes):
+    """Impuestos del documento sustento (base para calcular la retención)."""
+
+    list_display = ("codigo", "codigo_porcentaje", "base_imponible", "valor", "doc_sustento")
+    list_filter = ("codigo", "codigo_porcentaje")
+    search_fields = ("codigo", "codigo_porcentaje", "doc_sustento__num_doc_sustento",
+                     "doc_sustento__retencion__secuencial")
+    list_select_related = ("doc_sustento",)
+    list_per_page = 50
+    ordering = ("-pk",)

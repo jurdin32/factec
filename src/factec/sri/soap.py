@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Union
 import requests
 from lxml import etree
 
-from ..catalogos import Ambiente
+from ..catalogos import Ambiente, leer_ambiente
 from ..excepciones import ErrorAutorizacion, ErrorRecepcion, ErrorSRI
 from .endpoints import (
     NS_AUTORIZACION,
@@ -301,7 +301,7 @@ class ClienteSRI:
         session: Optional[requests.Session] = None,
         verificar_ssl: bool = True,
     ) -> None:
-        self.ambiente = int(getattr(ambiente, "value", ambiente))
+        self.ambiente = leer_ambiente(ambiente)
         self.host = host or host_ambiente(self.ambiente)
         self.timeout = timeout
         self.verificar_ssl = verificar_ssl
