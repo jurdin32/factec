@@ -1,5 +1,7 @@
 # factec
 
+[![CI](https://github.com/jurdin32/factec/actions/workflows/ci.yml/badge.svg)](https://github.com/jurdin32/factec/actions/workflows/ci.yml)
+
 **Facturación electrónica de Ecuador (SRI)** para Python y Django: genera, firma y
 envía los seis comprobantes electrónicos que exige el Servicio de Rentas Internas.
 
@@ -588,7 +590,8 @@ informe.certificado.nombre, informe.certificado.vencido()
 | [docs/flower.md](docs/flower.md) | El panel de Celery: pantallas, cómo seguir una factura y qué mirar cuando algo falla |
 | [docs/prueba-real.md](docs/prueba-real.md) | Emitir de verdad contra el ambiente de pruebas del SRI |
 | [examples/](examples/) | Scripts listos para ejecutar (incluye `celery.py` para copiar) |
-| [tests/](tests/) | 575 pruebas, incluida la validación contra los XSD oficiales |
+| [tests/](tests/) | 578 pruebas, incluida la validación contra los XSD oficiales |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | Lo que se comprueba en cada push: Python 3.9 a 3.14, XSD oficiales y el paquete instalable |
 
 ---
 
