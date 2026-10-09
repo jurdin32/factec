@@ -220,8 +220,9 @@ que refechar)»** los localiza de un vistazo.
 |---|---|---|
 | Django | Sí | `python manage.py runserver` (desarrollo) o `gunicorn mi_proyecto.wsgi` (producción) |
 | Redis | Solo si usa Celery | `redis-server` (o `docker run -p 6379:6379 redis`) |
-| Celery worker | Solo si usa Celery | `celery -A mi_proyecto worker -l info -c 4` |
+| Celery worker | Solo si usa Celery | `celery -A mi_proyecto worker -l info -c 4 -E` |
 | Celery beat | Opcional | `celery -A mi_proyecto beat -l info` (revisa la firma a las 7:00 y reintenta los pendientes cada 10 min) |
+| Flower (panel) | Opcional | `celery -A mi_proyecto flower` → <http://127.0.0.1:5555> (necesita el worker con `-E`) |
 | Archivos estáticos | Al desplegar | `python manage.py collectstatic` (con `DEBUG = False`) |
 
 **¿Hace falta Celery?** No. Sin Celery, `emitir()` firma, envía y espera la
@@ -239,6 +240,55 @@ fallan con `ValueError: not enough values to unpack` si no se pone
 `FORKED_BY_MULTIPROCESSING=1` en el `celery.py` (el pool usa «spawn»).
 
 El SRI es un servicio remoto: no hay nada que instalar ni levantar en su máquina.
+
+### Monitorizar con Flower (el panel de Celery)
+
+Flower es la interfaz web de Celery: ahí se ve qué tareas van llegando
+(`sri_fe.emitir_comprobante`, `sri_fe.revisar_certificado`…), cuáles fallan, los
+workers conectados y sus colas. El paquete lo trae como extra:
+
+```bash
+pip install "factec[django,flower]"
+
+# el worker tiene que enviar los eventos de las tareas, si no Flower no las ve
+celery -A mi_proyecto worker -l info -c 4 -E
+
+celery -A mi_proyecto flower --address=127.0.0.1 --port=5555    # panel
+```
+
+Si el servidor es remoto, no abra el puerto al mundo: tráigalo por SSH.
+
+```bash
+ssh -L 5555:127.0.0.1:5555 usuario@servidor     # y abra http://127.0.0.1:5555
+```
+
+Y para dejarlo expuesto, que sea con usuario y clave:
+`celery -A mi_proyecto flower --address=0.0.0.0 --basic_auth=juan:secreta`.
+
+### Servicios de Linux (systemd)
+
+Un comando del paquete crea los servicios del worker, del beat y de Flower con
+las rutas del proyecto ya resueltas:
+
+```bash
+sudo python manage.py servicios_celery                 # crea y arranca los tres
+python manage.py servicios_celery --dry-run            # enseña lo que haría
+python manage.py servicios_celery --estado             # ¿están funcionando?
+sudo python manage.py servicios_celery --reiniciar     # tras desplegar
+sudo python manage.py servicios_celery --quitar        # los elimina
+
+sudo python manage.py servicios_celery --sin-flower                       # sin panel
+sudo python manage.py servicios_celery --concurrencia 2 --usuario www-data
+sudo python manage.py servicios_celery --direccion 0.0.0.0 \
+     --flower-auth juan:secreta                                           # panel expuesto
+```
+
+Deja las unidades en `/etc/systemd/system` (`<proyecto>-celery-worker.service`,
+`…-celery-beat.service` y `…-flower.service`), las habilita al arranque, las
+arranca y comprueba que Redis responde. Los logs salen por journald:
+`journalctl -u <proyecto>-celery-worker -f`. El script que hace el trabajo viaja
+dentro del paquete: `python manage.py servicios_celery --ruta` dice dónde está
+(se puede copiar a otro servidor y ejecutar a mano).
 
 ### Comandos que vienen con el paquete
 

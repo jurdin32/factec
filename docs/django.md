@@ -1065,8 +1065,8 @@ CELERY_BEAT_SCHEDULE = {
 | `sri_fe.revisar_certificado` | Revisa la firma electrónica y avisa antes de que falle una emisión |
 
 ```bash
-celery -A mi_proyecto worker -l info -c 4   # -c: procesos (por omisión, uno por CPU)
-celery -A mi_proyecto beat -l info          # opcional: revisión de la firma y reintentos
+celery -A mi_proyecto worker -l info -c 4 -E   # -c: procesos; -E: envía eventos
+celery -A mi_proyecto beat -l info             # opcional: revisión y reintentos
 
 # Comprobar que el worker tiene las tareas del paquete:
 celery -A mi_proyecto inspect registered | grep sri_fe
@@ -1074,6 +1074,64 @@ celery -A mi_proyecto inspect registered | grep sri_fe
 # Lanzar una tarea a mano (útil para ver que todo el circuito funciona):
 celery -A mi_proyecto call sri_fe.revisar_certificado
 ```
+
+#### Flower: el panel de monitorización
+
+Flower es la interfaz web de Celery: ahí se ve cada tarea que entra
+(`sri_fe.emitir_comprobante`, `sri_fe.revisar_certificado`…), su estado, los
+argumentos, el resultado, las que fallan y los workers conectados.
+
+```bash
+pip install "factec[django,flower]"
+celery -A mi_proyecto flower --address=127.0.0.1 --port=5555
+# y abra http://127.0.0.1:5555
+```
+
+| Detalle | Por qué |
+|---|---|
+| El worker debe arrancar con **`-E`** | Sin eventos de tarea, Flower ve el worker pero **ninguna tarea** |
+| `--address=127.0.0.1` (por omisión) | Para un servidor remoto, tráigalo por SSH: `ssh -L 5555:127.0.0.1:5555 usuario@servidor` |
+| `--basic_auth=usuario:clave` | Obligatorio si lo expone (`--address=0.0.0.0`): el panel deja **ejecutar y revocar tareas** |
+| `FLOWER_UNAUTHENTICATED_API=1` | Solo si necesita consultar su API (`/api/tasks`) sin credenciales |
+| `--url_prefix=/flower` | Si lo publica detrás de un proxy, en un subdirectorio |
+
+El panel muestra las tareas con su nombre real, así que se ve el ciclo completo de
+una factura: `sri_fe.emitir_comprobante` → `RECIBIDO`/`AUTORIZADO`. Para saber si
+el circuito funciona, en el script de servicios hay un atajo:
+
+```bash
+python manage.py servicios_celery --estado
+```
+
+#### Servicios de systemd (Linux)
+
+El comando `servicios_celery` crea los tres servicios (worker, beat y Flower)
+con las rutas del proyecto ya resueltas, los habilita al arranque y comprueba que
+Redis responde:
+
+```bash
+sudo python manage.py servicios_celery                      # crea y arranca
+python manage.py servicios_celery --dry-run                 # enseña y no toca nada
+python manage.py servicios_celery --estado                  # Redis, worker, beat y Flower
+sudo python manage.py servicios_celery --reiniciar           # tras desplegar
+sudo python manage.py servicios_celery --quitar              # los elimina
+
+sudo python manage.py servicios_celery --sin-flower          # sin el panel
+sudo python manage.py servicios_celery --concurrencia 2 --usuario www-data
+sudo python manage.py servicios_celery --direccion 0.0.0.0 --flower-auth juan:secreta
+python manage.py servicios_celery --ruta                     # dónde está el script
+```
+
+Detrás está `instalar_servicios_celery.sh`, que viaja dentro del paquete (el
+comando le pasa el módulo de ajustes, el entorno virtual y la carpeta del
+proyecto). Se puede copiar a otro servidor y ejecutar a mano; con
+`--solo-archivos` deja las unidades donde le diga sin tocar systemctl.
+
+Las unidades quedan en `/etc/systemd/system/<proyecto>-celery-worker.service`,
+`…-celery-beat.service` y `…-flower.service`, con `Restart=always`, `journald`
+para los logs (`journalctl -u <proyecto>-celery-worker -f`) y un
+`EnvironmentFile` opcional en `<proyecto>/.env` para los secretos
+(`SRI_CLAVE_CIFRADO`, `CELERY_BROKER_URL`…).
 
 Las cuatro tareas quedan registradas solas porque `factec.django` está en
 `INSTALLED_APPS` y `autodiscover_tasks()` importa su `tasks`. Si arranca el worker

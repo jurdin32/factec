@@ -2319,3 +2319,109 @@ def test_la_migracion_clasifica_los_productos_que_ya_existian(documentos):
     assert por_horas.es_servicio is True
     assert sin_unidad.unidad_medida == "UNIDAD"
     assert sin_unidad.tipo == TipoProducto.PRODUCTO.value
+
+
+# ------------------------- comandos: servicios de Celery en Linux (systemd)
+
+
+def _proyecto_falso(tmp_path):
+    """Un proyecto Django mínimo: manage.py y el módulo de ajustes."""
+    proyecto = tmp_path / "proyecto"
+    (proyecto / "mi_proyecto").mkdir(parents=True, exist_ok=True)
+    (proyecto / "manage.py").write_text("#!/usr/bin/env python\n", encoding="utf-8")
+    (proyecto / "mi_proyecto" / "settings.py").write_text("", encoding="utf-8")
+    return proyecto
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="los servicios son de Linux")
+def test_el_comando_servicios_celery_genera_las_unidades(entorno_django, tmp_path):
+    """Crea las unidades del worker, del beat y de Flower con las rutas del proyecto."""
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    proyecto = _proyecto_falso(tmp_path)
+    destino = tmp_path / "unidades"
+
+    call_command(
+        "servicios_celery", "--solo-archivos", "--destino", str(destino),
+        "--proyecto-dir", str(proyecto), "--venv", sys.prefix, "--modulo", "mi_proyecto",
+        "--flower-auth", "juan:secreta", "--concurrencia", "2", stdout=StringIO(),
+    )
+
+    assert sorted(p.name for p in destino.iterdir()) == [
+        "proyecto-celery-beat.service",
+        "proyecto-celery-worker.service",
+        "proyecto-flower.service",
+    ]
+
+    worker = (destino / "proyecto-celery-worker.service").read_text(encoding="utf-8")
+    assert f"WorkingDirectory={proyecto}" in worker
+    assert 'Environment="DJANGO_SETTINGS_MODULE=mi_proyecto.settings"' in worker
+    assert "worker -l info -c 2 -E" in worker          # -E: Flower necesita los eventos
+    assert "Restart=always" in worker
+
+    beat = (destino / "proyecto-celery-beat.service").read_text(encoding="utf-8")
+    assert "celerybeat-schedule" in beat
+    assert "StateDirectory=proyecto" in beat
+
+    flower = (destino / "proyecto-flower.service").read_text(encoding="utf-8")
+    assert "flower --address=127.0.0.1 --port=5555 --basic_auth=juan:secreta" in flower
+    assert 'Environment="FLOWER_UNAUTHENTICATED_API=1"' in flower
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="los servicios son de Linux")
+def test_el_comando_servicios_celery_admite_el_panel_aparte(entorno_django, tmp_path):
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    proyecto = _proyecto_falso(tmp_path)
+    destino = tmp_path / "unidades"
+
+    call_command(
+        "servicios_celery", "--solo-archivos", "--destino", str(destino),
+        "--proyecto-dir", str(proyecto), "--venv", sys.prefix, "--modulo", "mi_proyecto",
+        "--sin-flower", "--puerto", "9000", stdout=StringIO(),
+    )
+
+    assert sorted(p.name for p in destino.iterdir()) == [
+        "proyecto-celery-beat.service",
+        "proyecto-celery-worker.service",
+    ]
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="los servicios son de Linux")
+def test_el_comando_servicios_celery_con_dry_run_no_escribe_nada(entorno_django, tmp_path):
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    proyecto = _proyecto_falso(tmp_path)
+    destino = tmp_path / "unidades"
+    salida = StringIO()
+
+    call_command(
+        "servicios_celery", "--dry-run", "--destino", str(destino),
+        "--proyecto-dir", str(proyecto), "--venv", sys.prefix, "--modulo", "mi_proyecto",
+        stdout=salida,
+    )
+
+    assert not destino.exists()
+    assert "systemctl enable --now" in salida.getvalue()
+    assert "Nada se ha tocado" in salida.getvalue()
+
+
+def test_el_comando_servicios_celery_dice_donde_esta_el_script(entorno_django):
+    from io import StringIO
+    from pathlib import Path
+
+    from django.core.management import call_command
+
+    salida = StringIO()
+    call_command("servicios_celery", "--ruta", stdout=salida)
+
+    ruta = Path(salida.getvalue().strip())
+    assert ruta.exists()
+    assert ruta.name == "instalar_servicios_celery.sh"
+    assert "instalar_servicios_celery.sh" in ruta.read_text(encoding="utf-8")

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "factec"
-version = "1.7.2"
+version = "1.8.0"
 description = "Facturación electrónica de Ecuador (SRI): clave de acceso, XML de todos los comprobantes, firma XAdES-BES y envío SOAP."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -32,8 +32,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Emitir en segundo plano desde Django (worker + beat). El cliente del broker se
+# instala aparte: pip install redis (si usa Redis).
 django = ["Django>=4.2", "celery>=5.3"]
-dev = ["pytest>=7.0", "pytest-cov", "signxml>=3.0", "Django>=4.2", "celery>=5.3"]
+# El panel de monitorización: celery -A mi_proyecto flower
+flower = ["flower>=2.0"]
+dev = ["pytest>=7.0", "pytest-cov", "signxml>=3.0", "Django>=4.2", "celery>=5.3", "flower>=2.0"]
 
 [project.urls]
 Homepage = "https://github.com/jurdin32/factec"
@@ -48,7 +52,9 @@ sri-fe = "factec.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-factec = ["py.typed"]
+# El script de servicios de Linux viaja dentro del paquete: así
+# «python manage.py servicios_celery» lo encuentra también tras el pip install.
+factec = ["py.typed", "deploy/*.sh"]
 "factec.django" = [
     "migrations/*.py",
     "static/sri_fe/js/*.js",
