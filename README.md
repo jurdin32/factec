@@ -229,15 +229,70 @@ resultado = emisor.emitir(factura)
 
 ---
 
+## Leer y verificar comprobantes
+
+Sirve para sus comprobantes y para los que le entreguen (por ejemplo, las
+facturas de sus proveedores). Todo son funciones normales: se usan en una vista,
+en una tarea o en un comando.
+
+```python
+from factec.django import consulta
+
+# 1) Una vista que devuelve el comprobante en JSON
+def detalle(request, clave):
+    datos = consulta.datos_por_clave(clave)          # estado + datos leídos + archivos
+    if datos is None:
+        return JsonResponse({"error": "no encontrado"}, status=404)
+    return JsonResponse(datos)
+
+# 2) Verificar una factura que llega en XML antes de guardarla
+informe = consulta.verificar_xml(xml_del_proveedor, exigir_firma=False)
+if not informe.ok:
+    return JsonResponse({"problemas": informe.problemas}, status=400)
+informe.emisor, informe.importe_total, informe.a_dict()
+
+# 3) Preguntar al SRI por una clave (actualiza el comprobante si es suyo)
+autorizacion = consulta.verificar_en_el_sri(clave)
+autorizacion.autorizada
+```
+
+Y desde el propio comprobante:
+
+```python
+registro = documentos.Factura.objects.get(pk=1).comprobante
+
+registro.leer()                  # datos separados: emisor, receptor, totales, líneas
+registro.verificar()             # firma, clave, fecha y totales: .ok, .problemas
+registro.verificar_en_el_sri()   # estado en el SRI (y lo guarda)
+registro.archivos()              # XML y respuestas guardados
+registro.a_dict()                # todo listo para JSON
+```
+
+Sin Django, el núcleo lee y verifica igual (también XML de terceros, usando el
+certificado que viene dentro de la firma):
+
+```python
+from factec import leer_comprobante, verificar_comprobante
+
+comprobante = leer_comprobante(xml)
+comprobante.emisor.ruc, comprobante.totales.importe_total
+[detalle.descripcion for detalle in comprobante.detalles]
+
+informe = verificar_comprobante(xml)     # ok, problemas, firma, certificado…
+informe.certificado.nombre, informe.certificado.vencido()
+```
+
+---
+
 ## Documentación
 
 | Documento | Contenido |
 |---|---|
-| [docs/nucleo.md](docs/nucleo.md) | Uso sin Django: clave de acceso, XML, firma, envío, catálogos, CLI y API |
+| [docs/nucleo.md](docs/nucleo.md) | Uso sin Django: clave de acceso, XML, firma, envío, lectura y verificación, CLI y API |
 | [docs/django.md](docs/django.md) | La app de Django: modelos, admin, adaptadores, Celery y ajustes |
 | [docs/prueba-real.md](docs/prueba-real.md) | Emitir de verdad contra el ambiente de pruebas del SRI |
 | [examples/](examples/) | Scripts listos para ejecutar |
-| [tests/](tests/) | 375 pruebas, incluida la validación contra los XSD oficiales |
+| [tests/](tests/) | 417 pruebas, incluida la validación contra los XSD oficiales |
 
 ---
 

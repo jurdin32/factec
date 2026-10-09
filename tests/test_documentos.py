@@ -1420,3 +1420,112 @@ def test_el_comando_archiva_aunque_el_comprobante_este_mal(documentos, factura, 
     assert (carpeta / archivos.NOMBRE_ERROR).is_file()
     assert (carpeta / archivos.NOMBRE_RESPUESTA_RECEPCION).is_file()
     assert not (carpeta / archivos.NOMBRE_AUTORIZADO).exists()
+
+
+# ------------------------------ consultar y verificar desde una vista
+
+
+def test_el_comprobante_se_puede_leer_desde_el_modelo(documentos, factura, cliente_falso):
+    """Métodos del modelo, pensados para usarlos en una vista."""
+    from decimal import Decimal
+
+    registro = factura.emitir(encolar=False)
+
+    leido = registro.leer()
+    assert leido.numero == "001-001-000000001"
+    assert leido.receptor.razon_social == "DISTRIBUIDORA ANDINA CÍA. LTDA."
+    assert leido.totales.importe_total == Decimal("280.00")
+    assert [detalle.descripcion for detalle in leido.detalles] == [
+        "Servicio de desarrollo", "Soporte mensual",
+    ]
+
+    informe = registro.verificar()
+    assert informe.ok is True
+    assert informe.firma is True
+    assert informe.clave_valida is True
+
+    datos = registro.a_dict(verificar=True)
+    assert datos["estado"] == "AUTORIZADO"
+    assert datos["leido"]["tipo"] == "01"
+    assert datos["verificacion"]["ok"] is True
+    assert datos["archivos"]
+
+
+def test_la_consulta_acepta_clave_pk_o_instancia(documentos, factura, cliente_falso):
+    from factec.django import consulta
+
+    registro = factura.emitir(encolar=False)
+
+    assert consulta.leer(registro.clave_acceso).numero == "001-001-000000001"
+    assert consulta.leer(registro.pk).numero == "001-001-000000001"
+    assert consulta.leer(registro).numero == "001-001-000000001"
+    assert consulta.datos_por_clave(registro.clave_acceso)["id"] == registro.pk
+    assert consulta.datos_por_clave("0" * 49) is None
+    assert consulta.archivos_de(registro.clave_acceso)
+
+
+def test_se_puede_verificar_un_xml_de_un_proveedor(documentos):
+    """El caso de las compras: llega un XML y se verifica antes de guardarlo."""
+    from decimal import Decimal
+
+    from factec.clave_acceso import generar_clave_acceso
+    from factec.django import consulta
+
+    # La clave se genera con el algoritmo del SRI: así la prueba comprueba de
+    # verdad el dígito verificador y la coherencia con el documento.
+    clave = generar_clave_acceso(
+        fecha_emision="15/09/2026", tipo_comprobante="01", ruc="1790012345001",
+        ambiente=1, serie="001001", secuencial="42", codigo_numerico="12345678",
+    )
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<factura id="comprobante" version="1.1.0">'
+        "<infoTributaria><ambiente>1</ambiente><tipoEmision>1</tipoEmision>"
+        "<razonSocial>PROVEEDOR S.A.</razonSocial><ruc>1790012345001</ruc>"
+        f"<claveAcceso>{clave}</claveAcceso>"
+        "<codDoc>01</codDoc><estab>001</estab><ptoEmi>001</ptoEmi>"
+        "<secuencial>000000042</secuencial><dirMatriz>QUITO</dirMatriz></infoTributaria>"
+        "<infoFactura><fechaEmision>15/09/2026</fechaEmision>"
+        "<tipoIdentificacionComprador>04</tipoIdentificacionComprador>"
+        "<razonSocialComprador>MI TIENDA</razonSocialComprador>"
+        "<identificacionComprador>0703886697001</identificacionComprador>"
+        "<totalSinImpuestos>100.00</totalSinImpuestos><totalDescuento>0.00</totalDescuento>"
+        "<totalConImpuestos><totalImpuesto><codigo>2</codigo>"
+        "<codigoPorcentaje>4</codigoPorcentaje><baseImponible>100.00</baseImponible>"
+        "<tarifa>15.00</tarifa><valor>15.00</valor></totalImpuesto></totalConImpuestos>"
+        "<importeTotal>115.00</importeTotal><moneda>DOLAR</moneda></infoFactura>"
+        "<detalles><detalle><codigoPrincipal>P1</codigoPrincipal>"
+        "<descripcion>Mercadería</descripcion><cantidad>1.000000</cantidad>"
+        "<precioUnitario>100.000000</precioUnitario><descuento>0.00</descuento>"
+        "<precioTotalSinImpuesto>100.00</precioTotalSinImpuesto></detalle></detalles>"
+        "</factura>"
+    )
+
+    informe = consulta.verificar_xml(xml, exigir_firma=False)
+
+    assert informe.ok is True                     # cuadra y la clave es coherente
+    assert informe.emisor == "PROVEEDOR S.A."
+    assert informe.receptor == "MI TIENDA"
+    assert informe.importe_total == Decimal("115.00")
+
+    # Y sus datos, listos para volcar en un modelo de compras propio.
+    from factec.lectura import leer_comprobante
+
+    datos = leer_comprobante(xml).a_dict()
+    assert datos["emisor"]["ruc"] == "1790012345001"
+    assert datos["emisor"]["razon_social"] == "PROVEEDOR S.A."
+    assert datos["receptor"]["razon_social"] == "MI TIENDA"
+    assert datos["detalles"][0]["descripcion"] == "Mercadería"
+    assert datos["fecha_emision"] == "2026-09-15"
+
+
+def test_verificar_en_el_sri_actualiza_el_comprobante(documentos, factura, cliente_falso):
+    """La misma consulta del admin, pero desde código."""
+    registro = factura.emitir(encolar=False)
+
+    autorizacion = registro.verificar_en_el_sri()
+
+    assert autorizacion.autorizada is True
+    registro.refresh_from_db()
+    assert registro.estado == "AUTORIZADO"
+    assert registro.respuesta_autorizacion

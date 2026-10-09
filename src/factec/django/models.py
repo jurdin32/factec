@@ -49,24 +49,12 @@ CATEGORIA_NEGOCIO_POPULAR = "NEGOCIO POPULAR"
 def extraer_ruc(certificado: Any) -> Optional[str]:
     """Devuelve el RUC del titular del certificado, si se puede deducir.
 
-    En los certificados ecuatorianos el RUC suele figurar en el atributo
-    ``serialNumber`` (OID 2.5.4.5) o dentro del nombre común.
+    En los certificados ecuatorianos el RUC va en el atributo ``serialNumber``
+    (OID 2.5.4.5) o dentro del nombre común, no siempre con los trece dígitos.
     """
-    import re
+    from ..firma.xades import ruc_del_certificado
 
-    from cryptography import x509
-
-    sujeto = certificado.certificado.subject
-    for atributo in sujeto:
-        if atributo.oid == x509.oid.NameOID.SERIAL_NUMBER:
-            encontrado = re.search(r"\d{13}", str(atributo.value))
-            if encontrado:
-                return encontrado.group(0)
-    for atributo in sujeto:
-        encontrado = re.search(r"\d{13}", str(atributo.value))
-        if encontrado:
-            return encontrado.group(0)
-    return None
+    return ruc_del_certificado(certificado) or None
 
 
 def es_modelo_guardado(objeto: Any) -> bool:
@@ -480,6 +468,54 @@ class ComprobanteEmitido(models.Model):
     def xml_para_archivar(self) -> str:
         """El XML con validez legal: el autorizado si existe, si no el firmado."""
         return self.xml_autorizado or self.xml_firmado or self.xml_sin_firma
+
+    # ------------------------------------------------- consultar y verificar
+
+    def leer(self) -> Any:
+        """Lee el XML del comprobante y devuelve sus datos ya separados.
+
+        Sirve para una vista: ``registro.leer().totales.importe_total``,
+        ``registro.leer().a_dict()``…
+        """
+        from . import consulta
+
+        return consulta.leer(self)
+
+    def verificar(self, *, exigir_firma: bool = True) -> Any:
+        """Verifica firma, clave de acceso, fecha y totales del comprobante."""
+        from . import consulta
+
+        return consulta.verificar(self, exigir_firma=exigir_firma)
+
+    def verificar_en_el_sri(
+        self,
+        *,
+        guardar: bool = True,
+        intentos: Optional[int] = None,
+        espera: Optional[float] = None,
+    ) -> Any:
+        """Pregunta al SRI por el estado de este comprobante.
+
+        Con ``guardar=True`` se actualizan el estado, los mensajes, la respuesta
+        del SRI y los archivos.
+        """
+        from . import consulta
+
+        return consulta.verificar_en_el_sri(
+            self, guardar=guardar, intentos=intentos, espera=espera
+        )
+
+    def archivos(self) -> List[Dict[str, Any]]:
+        """Archivos guardados en disco (XML y respuestas del SRI)."""
+        from . import archivos as modulo
+
+        return modulo.archivos_del_registro(self)
+
+    def a_dict(self, *, verificar: bool = False) -> Dict[str, Any]:
+        """Todo el comprobante en un diccionario listo para JSON (vistas, APIs)."""
+        from . import consulta
+
+        return consulta.datos(self, verificar_comprobante_=verificar)
 
     # ------------------------------------------------------------- mutadores
 

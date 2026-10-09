@@ -475,6 +475,89 @@ python manage.py archivar_comprobantes --estado DEVUELTO      # solo los devuelt
 python manage.py archivar_comprobantes --simular              # ver sin escribir
 ```
 
+### Leer y verificar desde una vista
+
+Todo lo del comprobante se puede consultar desde código, sin pasar por el admin:
+`factec.django.consulta` reúne las operaciones que suele necesitar una vista.
+
+| Función | Para qué |
+|---|---|
+| `consulta.datos(registro_o_pk_o_clave, verificar_comprobante_=True)` | Todo en un diccionario listo para JSON |
+| `consulta.datos_por_clave(clave)` | Igual, buscando por clave (``None`` si no existe) |
+| `consulta.leer(...)` | Datos del comprobante ya separados |
+| `consulta.verificar(...)` | Firma, clave de acceso, fecha y totales |
+| `consulta.verificar_xml(xml)` | Verifica un XML suelto (factura de un proveedor) |
+| `consulta.verificar_en_el_sri(clave_o_registro)` | Pregunta al SRI y guarda el resultado |
+| `consulta.archivos_de(...)` | XML y respuestas guardados en disco |
+
+```python
+import json
+
+from django.http import JsonResponse
+
+from factec.django import consulta
+
+
+def comprobante_json(request, clave):
+    """Vista de ejemplo: devuelve el comprobante con su estado y su verificación."""
+    datos = consulta.datos_por_clave(clave, verificar_comprobante_=True)
+    if datos is None:
+        return JsonResponse({"error": "No existe ese comprobante."}, status=404)
+    return JsonResponse(datos)
+
+
+def comprobante_del_sri(request, clave):
+    """Vista de ejemplo: comprueba en el SRI si la clave está autorizada."""
+    autorizacion = consulta.verificar_en_el_sri(clave)      # guarda si es nuestro
+    return JsonResponse(autorizacion.a_dict())
+```
+
+#### Comprobantes de proveedores (compras)
+
+Un XML que le entregan se puede leer y verificar antes de registrarlo. La
+verificación usa el certificado que va **dentro** de la firma, así que no hace
+falta pedir el `.p12` al proveedor:
+
+```python
+from factec.django import consulta
+from factec.lectura import leer_comprobante
+
+def recibir_factura(request):
+    xml = request.FILES["xml"].read()
+
+    informe = consulta.verificar_xml(xml)          # firma, clave, totales, fecha
+    if not informe.ok:
+        return JsonResponse({"problemas": informe.problemas}, status=400)
+
+    leido = leer_comprobante(xml)
+    compra = MiCompra.objects.create(
+        proveedor=leido.emisor.razon_social,
+        ruc=leido.emisor.ruc,
+        numero=leido.numero,
+        fecha=leido.fecha_emision,
+        total=leido.totales.importe_total,
+        clave_acceso=leido.clave_acceso,
+    )
+    for detalle in leido.detalles:
+        compra.lineas.create(descripcion=detalle.descripcion,
+                             cantidad=detalle.cantidad,
+                             precio=detalle.precio_unitario)
+
+    # Y, si quiere confirmar con el SRI que esa clave está autorizada:
+    autorizacion = consulta.verificar_en_el_sri(leido.clave_acceso)
+    return JsonResponse({"guardada": True, "autorizada": autorizacion.autorizada})
+```
+
+Los métodos del propio comprobante hacen lo mismo sin importar nada más:
+
+```python
+registro.leer()                  # ComprobanteLeido
+registro.verificar()             # InformeVerificacion
+registro.verificar_en_el_sri()   # AutorizacionLeida (guarda estado, respuesta y archivos)
+registro.archivos()              # [{nombre, ruta, relativa, bytes}]
+registro.a_dict(verificar=True)  # diccionario para JSON
+```
+
 ### Emitir desde el código
 
 Los servicios leen la configuración de la base de datos:

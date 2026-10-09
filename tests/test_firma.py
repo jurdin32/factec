@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
+import re
+
 import pytest
 from lxml import etree
 
@@ -15,6 +17,7 @@ from factec.firma import (
     NS_DS,
     NS_XADES,
     Certificado,
+    certificado_del_xml,
     firmar_xml,
     verificar_firma,
 )
@@ -144,9 +147,26 @@ class TestFirma:
         with pytest.raises(ErrorFirma, match="ninguna firma"):
             verificar_firma(factura_armada.to_xml(), certificado)
 
-    def test_verificar_requiere_certificado(self, firmado):
+    def test_verificar_sin_certificado_usa_el_del_xml(self, firmado, certificado):
+        """El certificado viaja dentro de la firma: no hace falta que se lo den."""
+        resultado = verificar_firma(firmado, None)
+
+        assert resultado["valido"] is True
+        incrustado = certificado_del_xml(firmado)
+        assert incrustado is not None
+        assert incrustado.certificado == certificado.certificado
+
+    def test_verificar_sin_firma_avisa(self):
+        with pytest.raises(ErrorFirma, match="Signature"):
+            verificar_firma("<factura id='comprobante'/>", None)
+
+    def test_verificar_un_xml_sin_certificado_incrustado_avisa(self, firmado):
+        """Si a la firma le quitan el certificado, no se puede comprobar el RSA."""
+        sin_certificado = re.sub(
+            r"<ds:X509Certificate>.*?</ds:X509Certificate>", "", firmado, flags=re.S
+        )
         with pytest.raises(ErrorFirma, match="certificado"):
-            verificar_firma(firmado, None)
+            verificar_firma(sin_certificado, None)
 
     def test_fecha_de_firma_explicita(self, factura_armada, certificado):
         momento = datetime(2026, 10, 8, 12, 0, 0, tzinfo=timezone.utc)

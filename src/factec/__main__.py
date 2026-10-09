@@ -46,6 +46,8 @@ from .clave_acceso import (
 from .emisor import EmisorElectronico
 from .excepciones import ErrorFacturacion
 from .firma import Certificado, firmar_xml, verificar_firma
+from .lectura import leer_comprobante
+from .verificacion import verificar_comprobante
 from .modelos import (
     Destinatario,
     Detalle,
@@ -150,12 +152,52 @@ def cmd_firmar(args: argparse.Namespace) -> int:
 
 
 def cmd_verificar(args: argparse.Namespace) -> int:
+    """Comprueba firma, clave de acceso, fecha y totales del comprobante."""
     certificado = None
     if args.certificado:
         certificado = Certificado.desde_archivo(args.certificado, args.clave_clave or "")
     xml = Path(args.archivo).read_text(encoding="utf-8")
-    resultado = verificar_firma(xml, certificado)
-    print(json.dumps(resultado, ensure_ascii=False, indent=2, default=str))
+
+    if args.solo_firma:
+        print(json.dumps(verificar_firma(xml, certificado), ensure_ascii=False, indent=2, default=str))
+        return 0
+
+    informe = verificar_comprobante(xml, certificado=certificado)
+    # El JSON va a la salida estándar (se puede canalizar a otro programa) y los
+    # mensajes para leerlos, a la de errores.
+    print(json.dumps(informe.a_dict(), ensure_ascii=False, indent=2))
+    if informe.ok:
+        print(f"✅ {informe.descripcion_tipo} {informe.numero} verificada.", file=sys.stderr)
+        return 0
+    for problema in informe.problemas:
+        print(f"❌ {problema}", file=sys.stderr)
+    return 4
+
+
+def cmd_leer(args: argparse.Namespace) -> int:
+    """Muestra los datos del comprobante que hay en un XML."""
+    xml = Path(args.archivo).read_text(encoding="utf-8")
+    comprobante = leer_comprobante(xml)
+
+    if args.json:
+        print(json.dumps(comprobante.a_dict(), ensure_ascii=False, indent=2))
+        return 0
+
+    print(f"{comprobante.descripcion_tipo} {comprobante.numero}  ({comprobante.version})")
+    print(f"clave        : {comprobante.clave_acceso}")
+    print(f"fecha        : {comprobante.fecha_emision}   ambiente: {comprobante.ambiente}")
+    print(f"emisor       : {comprobante.emisor.ruc}  {comprobante.emisor.razon_social}")
+    print(f"receptor     : {comprobante.receptor.identificacion}  {comprobante.receptor.razon_social}")
+    print(f"subtotal     : {comprobante.totales.subtotal}")
+    print(f"impuestos    : {comprobante.totales.valor_impuestos}")
+    print(f"importe total: {comprobante.totales.importe_total}")
+    for numero, detalle in enumerate(comprobante.detalles, start=1):
+        print(
+            f"  {numero}. {detalle.cantidad} × {detalle.precio_unitario}  "
+            f"{detalle.descripcion}  [{detalle.codigo_principal}]"
+        )
+    for nombre, valor in comprobante.info_adicional.items():
+        print(f"  {nombre}: {valor}")
     return 0
 
 
@@ -294,11 +336,25 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("--algoritmo", default="sha1", choices=["sha1", "sha256", "sha512"])
     p.set_defaults(func=cmd_firmar)
 
-    p = sub.add_parser("verificar", help="Verifica las firmas de un XML")
-    p.add_argument("archivo", help="XML firmado")
-    p.add_argument("--certificado", help="Archivo .p12 del firmante")
+    p = sub.add_parser(
+        "verificar",
+        help="Verifica un comprobante: firma, clave de acceso, fecha y totales",
+    )
+    p.add_argument("archivo", help="XML del comprobante")
+    p.add_argument("--certificado", help="Archivo .p12 del firmante (si no, el del XML)")
     p.add_argument("--clave-clave", dest="clave_clave", help="Contraseña del .p12")
+    p.add_argument(
+        "--solo-firma",
+        dest="solo_firma",
+        action="store_true",
+        help="Comprobar únicamente las firmas XAdES-BES",
+    )
     p.set_defaults(func=cmd_verificar)
+
+    p = sub.add_parser("leer", help="Muestra los datos del comprobante que hay en un XML")
+    p.add_argument("archivo", help="XML del comprobante (propio o de un proveedor)")
+    p.add_argument("--json", action="store_true", help="Imprime todo en JSON")
+    p.set_defaults(func=cmd_leer)
 
     p = sub.add_parser("autorizar", help="Consulta en el SRI el estado de una clave")
     p.add_argument("clave", help="Clave de acceso de 49 dígitos")

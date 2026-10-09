@@ -8,12 +8,20 @@ from .xades import (
     NS_DS,
     NS_XADES,
     Certificado,
+    CertificadoPublico,
+    certificado_del_xml,
+    ruc_de_texto,
+    ruc_del_certificado,
     firmar_xml,
     verificar_firma,
 )
 
 __all__ = [
     "Certificado",
+    "CertificadoPublico",
+    "certificado_del_xml",
+    "ruc_de_texto",
+    "ruc_del_certificado",
     "firmar_xml",
     "verificar_firma",
     "ALGORITMOS",

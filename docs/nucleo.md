@@ -233,11 +233,21 @@ sri-fe clave --clave 0810202601179001234500110010010000000011234567819
 
 sri-fe ejemplo --salida ./salida                   # XML de los 6 comprobantes
 sri-fe firmar salida/factura.xml --certificado firmante.p12 --clave-clave mi-clave
-sri-fe verificar salida/factura_firmado.xml --certificado firmante.p12 --clave-clave mi-clave
+
+sri-fe leer salida/factura_firmado.xml             # datos del comprobante
+sri-fe leer factura_proveedor.xml --json
+
+sri-fe verificar salida/factura_firmado.xml        # firma, clave, fecha y totales
+sri-fe verificar salida/factura_firmado.xml --solo-firma   # solo las firmas XAdES-BES
 
 sri-fe autorizar 0810202601179001234500110010010000000011234567819 --ambiente pruebas
 sri-fe enviar salida/factura_firmado.xml --ambiente pruebas
 ```
+
+`verificar` usa el certificado que va dentro del XML, así que para comprobantes
+de terceros no hace falta indicar nada. El informe completo se imprime en JSON
+(la salida se puede canalizar a otro programa) y los mensajes legibles van a la
+salida de errores; devuelve código 4 si el comprobante no pasa la verificación.
 
 ---
 
@@ -323,6 +333,93 @@ decimales (con `base` = `cantidad × precioUnitario − descuento`).
 | `lanzar_si_fallo()` | Lanza la excepción adecuada si algo falló |
 
 ---
+
+## Leer comprobantes
+
+`factec.lectura` pasa cualquier XML de comprobante (factura, liquidación de
+compra, nota de crédito, nota de débito, guía de remisión o retención) a objetos
+de Python. Sirve igual para los suyos y para los de terceros.
+
+```python
+from factec import leer_comprobante, leer_autorizacion
+
+comprobante = leer_comprobante(xml)
+comprobante.tipo                 # "01"
+comprobante.descripcion_tipo     # "Factura"
+comprobante.numero               # "001-001-000000013"
+comprobante.fecha_emision        # date(2026, 10, 8)
+comprobante.clave_acceso
+comprobante.emisor.ruc           # datos del emisor, obligado a contabilidad, RIMPE…
+comprobante.receptor.razon_social
+comprobante.receptor.es_consumidor_final
+comprobante.totales.importe_total
+comprobante.totales.valor_impuestos
+comprobante.detalles[0].descripcion
+comprobante.detalles[0].codigo_auxiliar
+comprobante.detalles[0].datos_adicionales
+comprobante.info_adicional
+comprobante.pagos
+comprobante.a_dict()             # listo para JSON (fechas y decimales como texto)
+```
+
+`extras` lleva lo propio de cada documento: el `motivo` y el documento modificado
+de la nota de crédito, el transportista y los destinatarios de la guía, o el
+`sujeto_retenido` y los `docs_sustento` de la retención.
+
+De la respuesta del SRI se saca todo lo de la autorización, incluido el
+comprobante autorizado:
+
+```python
+autorizacion = leer_autorizacion(respuesta_xml)
+autorizacion.estado, autorizacion.autorizada
+autorizacion.numero_autorizacion, autorizacion.fecha_autorizacion
+autorizacion.mensajes
+autorizacion.comprobante.totales.importe_total
+```
+
+Si lo que hay en el XML viene con prefijos (`soap:`, `ds:`, `ns2:`), se limpian
+solos; y si el documento tiene un nombre de campo distinto al habitual, los
+buscadores son tolerantes (por ejemplo `codigoPrincipal` o `codigoInterno`).
+
+## Verificar comprobantes
+
+`factec.verificacion` comprueba todo lo que se puede revisar sin salir a la red:
+
+| Comprobación | Detalle |
+|---|---|
+| **Firma** XAdES-BES | Digest del documento, digest de `SignedProperties` y RSA con el certificado que trae el XML |
+| **Certificado** | Vigente y del mismo RUC que el emisor |
+| **Clave de acceso** | Dígito verificador y coherencia con el documento (fecha, tipo, RUC, serie, secuencial) |
+| **Fecha de emisión** | Dentro de la ventana del SRI (90 días, nunca futura) |
+| **Totales** | La suma de las líneas, los impuestos y el importe total |
+
+```python
+from factec import verificar_comprobante
+
+informe = verificar_comprobante(xml_de_mi_proveedor)
+informe.ok              # True si todo cuadra
+informe.problemas       # ["La firma no es válida: el XML fue alterado"]
+informe.avisos          # cosas no bloqueantes (versión distinta, sin certificado…)
+informe.firma, informe.clave_valida, informe.clave_coincide
+informe.fecha_en_rango, informe.totales_cuadran
+informe.certificado.nombre, informe.certificado.ruc, informe.certificado.vencido()
+informe.a_dict()
+```
+
+Con `exigir_firma=False` se revisa un borrador propio (todavía sin firmar). Y si
+el certificado no viene incrustado en el XML, se puede pasar el que corresponda
+con `certificado=`.
+
+Para el estado en el SRI:
+
+```python
+from factec import verificar_en_el_sri
+
+autorizacion = verificar_en_el_sri(clave_acceso, ambiente=1)
+autorizacion.autorizada
+autorizacion.estado          # "AUTORIZADO", "NO AUTORIZADO", "NO ENCONTRADO"…
+autorizacion.mensajes
+```
 
 ## Validación contra los XSD
 

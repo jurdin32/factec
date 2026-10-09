@@ -38,6 +38,10 @@ from ..excepciones import ErrorCertificado, ErrorFirma
 
 __all__ = [
     "Certificado",
+    "CertificadoPublico",
+    "certificado_del_xml",
+    "ruc_del_certificado",
+    "ruc_de_texto",
     "firmar_xml",
     "verificar_firma",
     "ALGORITMOS",
@@ -189,6 +193,145 @@ class Certificado:
                 f"{_fecha_certificado(self.certificado, 'not_valid_before')} - "
                 f"{_fecha_certificado(self.certificado, 'not_valid_after')}"
             )
+
+
+@dataclass
+class CertificadoPublico:
+    """Certificado que viene **dentro** del XML firmado (sin clave privada).
+
+    Sirve para verificar comprobantes de terceros: no hace falta que le envíen el
+    ``.p12``, el certificado viaja en la propia firma XAdES-BES.
+    """
+
+    certificado: x509.Certificate
+
+    @property
+    def titular(self) -> str:
+        return self.certificado.subject.rfc4514_string()
+
+    @property
+    def emisor(self) -> str:
+        return self.certificado.issuer.rfc4514_string()
+
+    @property
+    def numero_serie(self) -> int:
+        return self.certificado.serial_number
+
+    @property
+    def ruc(self) -> str:
+        """RUC del titular, si el certificado lo declara."""
+        return _ruc_del_certificado(self.certificado)
+
+    @property
+    def nombre(self) -> str:
+        for atributo in (x509.oid.NameOID.COMMON_NAME, x509.oid.NameOID.ORGANIZATION_NAME):
+            valores = self.certificado.subject.get_attributes_for_oid(atributo)
+            if valores:
+                return str(valores[0].value)
+        return self.titular
+
+    @property
+    def valido_desde(self) -> datetime:
+        return _fecha_certificado(self.certificado, "not_valid_before")
+
+    @property
+    def valido_hasta(self) -> datetime:
+        return _fecha_certificado(self.certificado, "not_valid_after")
+
+    def vencido(self, momento: Optional[datetime] = None) -> bool:
+        momento = momento or datetime.now(timezone.utc)
+        return not (self.valido_desde <= momento <= self.valido_hasta)
+
+    @property
+    def der(self) -> bytes:
+        return self.certificado.public_bytes(serialization.Encoding.DER)
+
+    def huella(self, algoritmo: str = "sha1") -> str:
+        return self.certificado.fingerprint(_HASHES[algoritmo]()).hex()
+
+    def a_dict(self) -> Dict[str, Any]:
+        return {
+            "titular": self.titular,
+            "nombre": self.nombre,
+            "ruc": self.ruc,
+            "emisor": self.emisor,
+            "numero_serie": self.numero_serie,
+            "valido_desde": self.valido_desde.isoformat(),
+            "valido_hasta": self.valido_hasta.isoformat(),
+            "vencido": self.vencido(),
+            "huella_sha1": self.huella("sha1"),
+        }
+
+
+def certificado_del_xml(xml: Union[str, bytes]) -> Optional[CertificadoPublico]:
+    """Extrae el certificado que va dentro de la firma del XML, si lo lleva."""
+    if isinstance(xml, str):
+        xml = xml.encode("utf-8")
+    try:
+        raiz = etree.fromstring(xml)
+    except etree.XMLSyntaxError:
+        return None
+
+    nodos = raiz.findall(f".//{{{NS_DS}}}X509Certificate")
+    # Hay dos apariciones: la del ``KeyInfo`` y la del ``SigningCertificate``.
+    for nodo in nodos:
+        if not (nodo.text or "").strip():
+            continue
+        try:
+            return CertificadoPublico(
+                certificado=x509.load_der_x509_certificate(base64.b64decode(nodo.text))
+            )
+        except Exception:  # noqa: BLE001 - se prueba la siguiente
+            continue
+    return None
+
+
+def _ruc_del_certificado(certificado: x509.Certificate) -> str:
+    """RUC del titular del certificado.
+
+    En los certificados ecuatorianos el RUC va en ``serialNumber`` (OID 2.5.4.5),
+    a veces solo con los diez primeros dígitos y un guion con el número de serie
+    (``0703886697-141024143934``), y otras en el nombre común. Se completa a trece
+    dígitos cuando aparece la parte base.
+    """
+    sujeto = certificado.subject
+    for atributo in (x509.oid.NameOID.SERIAL_NUMBER, x509.oid.NameOID.COMMON_NAME):
+        for valor in sujeto.get_attributes_for_oid(atributo):
+            ruc = ruc_de_texto(str(valor.value))
+            if ruc:
+                return ruc
+
+    for atributo in sujeto:
+        ruc = ruc_de_texto(str(atributo.value))
+        if ruc:
+            return ruc
+    return ""
+
+
+def ruc_de_texto(texto: str) -> str:
+    """Saca el RUC de un texto del certificado (o ``""`` si no hay).
+
+    Admite los trece dígitos seguidos, los diez dígitos de la parte base (a los
+    que se añade el establecimiento ``001``) y el guion con el número de serie.
+    """
+    import re
+
+    encontrado = re.search(r"\d{13}", texto)
+    if encontrado:
+        return encontrado.group(0)
+
+    for bloque in re.split(r"[^\d]+", texto):
+        if len(bloque) == 10:          # RUC sin el establecimiento
+            return bloque + "001"
+        if len(bloque) >= 13:
+            return bloque[:13]
+    return ""
+
+
+def ruc_del_certificado(certificado: Any) -> str:
+    """RUC del titular de un certificado (``x509`` o del paquete)."""
+    x509_cert = getattr(certificado, "certificado", certificado)
+    return _ruc_del_certificado(x509_cert)
 
 
 def _cargar_cadenas(ruta: Path) -> List[x509.Certificate]:
@@ -377,13 +520,18 @@ def _algoritmo_desde_uri(uri: str) -> str:
 
 def verificar_firma(
     xml: Union[str, bytes],
-    certificado: Optional[Certificado] = None,
+    certificado: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Verifica las firmas XAdES-BES del documento.
 
     Comprueba, por cada ``Signature``: el digest del comprobante, el digest de
     ``SignedProperties`` y la firma RSA de ``SignedInfo``. Devuelve el detalle y
     lanza :class:`ErrorFirma` si algo no cuadra.
+
+    ``certificado`` es opcional: si no se indica, se usa el que viene **dentro**
+    del XML (lo normal al verificar un comprobante ajeno). Se acepta un
+    :class:`Certificado`, un :class:`CertificadoPublico` o un
+    ``cryptography.x509.Certificate``.
     """
     if isinstance(xml, str):
         xml = xml.encode("utf-8")
@@ -392,8 +540,18 @@ def verificar_firma(
     firmas = raiz.findall(f"{{{NS_DS}}}Signature")
     if not firmas:
         raise ErrorFirma("El documento no contiene ninguna firma ds:Signature.")
+
     if certificado is None:
-        raise ErrorFirma("Se requiere el certificado para verificar la firma RSA.")
+        incrustado = certificado_del_xml(xml)
+        if incrustado is None:
+            raise ErrorFirma(
+                "Se requiere el certificado para verificar la firma RSA y el XML "
+                "no lo trae incrustado."
+            )
+        certificado = incrustado
+    elif not isinstance(certificado, (Certificado, CertificadoPublico)):
+        certificado = CertificadoPublico(certificado=x509.Certificate(certificado))
+
     clave_publica = certificado.certificado.public_key()
 
     resultados: List[Dict[str, bool]] = []

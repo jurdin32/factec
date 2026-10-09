@@ -53,7 +53,21 @@ from .excepciones import (
     ErrorSRI,
     ErrorValidacion,
 )
-from .firma import Certificado, firmar_xml, verificar_firma
+from .firma import (
+    Certificado,
+    CertificadoPublico,
+    certificado_del_xml,
+    firmar_xml,
+    ruc_del_certificado,
+    verificar_firma,
+)
+from .lectura import (
+    AutorizacionLeida,
+    ComprobanteLeido,
+    DetalleLeido,
+    leer_autorizacion,
+    leer_comprobante,
+)
 from .modelos import (
     Compensacion,
     Destinatario,
@@ -73,6 +87,11 @@ from .modelos import (
     Reembolso,
     TotalImpuesto,
 )
+from .verificacion import (
+    InformeVerificacion,
+    verificar_comprobante,
+    verificar_en_el_sri,
+)
 from .sri import (
     ClienteSRI,
     DatosRuc,
@@ -82,7 +101,7 @@ from .sri import (
     existe_ruc,
 )
 
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 
 __all__ = [
     "__version__",
@@ -123,8 +142,20 @@ __all__ = [
     "calcular_digito_verificador",
     # firma
     "Certificado",
+    "CertificadoPublico",
+    "certificado_del_xml",
     "firmar_xml",
     "verificar_firma",
+    "ruc_del_certificado",
+    # leer y verificar comprobantes
+    "ComprobanteLeido",
+    "DetalleLeido",
+    "AutorizacionLeida",
+    "leer_comprobante",
+    "leer_autorizacion",
+    "verificar_comprobante",
+    "verificar_en_el_sri",
+    "InformeVerificacion",
     # SRI
     "ClienteSRI",
     "RespuestaRecepcion",
@@ -145,6 +176,8 @@ __all__ = [
     "ErrorAutorizacion",
     # submódulos
     "catalogos",
+    "lectura",
+    "verificacion",
     "modelos",
     "comprobantes",
     "firma",

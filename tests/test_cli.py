@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 
 import pytest
 
@@ -87,10 +88,16 @@ class TestFirmarYVerificar:
         assert firmado.exists()
         assert "Signature" in firmado.read_text(encoding="utf-8")
 
+        # ``verificar`` comprueba todo (firma, clave, fecha y totales).
         assert main(["verificar", str(firmado), "--certificado", str(ruta_certificado),
                      "--clave-clave", "clave-de-pruebas"]) == 0
         resultado = json.loads(capsys.readouterr().out)
-        assert resultado["valido"] is True
+        assert resultado["ok"] is True
+        assert resultado["firma"] is True
+
+        # ``--solo-firma`` mantiene el informe de firmas de siempre.
+        assert main(["verificar", str(firmado), "--solo-firma"]) == 0
+        assert json.loads(capsys.readouterr().out)["valido"] is True
 
     def test_firmar_archivo_inexistente(self, tmp_path, ruta_certificado, capsys):
         assert main(["firmar", str(tmp_path / "no.xml"), "--certificado",
@@ -121,3 +128,82 @@ class TestParser:
     def test_ambiente_invalido(self, capsys):
         with pytest.raises(SystemExit):
             main(["autorizar", CLAVE, "--ambiente", "otro"])
+
+
+class TestLeerYVerificar:
+    """La línea de comandos también lee y verifica comprobantes."""
+
+    @pytest.fixture
+    def xml_firmado(self, tmp_path, certificado):
+        """Un comprobante de verdad, firmado y guardado en disco."""
+        from factec.clave_acceso import generar_clave_acceso
+        from factec.comprobantes import Factura
+        from factec.firma import firmar_xml
+        from factec.modelos import Detalle, Emisor, Impuesto, Receptor
+        from factec.catalogos import TarifaIva, TipoIdentificacion
+
+        factura = Factura(
+            emisor=Emisor(ruc="1790012345001", razon_social="ACME S.A.", dir_matriz="Quito"),
+            fecha_emision=date.today(),
+            secuencial="42",
+            receptor=Receptor(
+                razon_social="CLIENTE", identificacion="0703886697001",
+                tipo_identificacion=TipoIdentificacion.RUC,
+            ),
+            detalles=[Detalle(descripcion="Servicio", cantidad=1, precio_unitario=100,
+                              codigo_principal="SRV1",
+                              impuestos=[Impuesto(codigo_porcentaje=TarifaIva.IVA_15)])],
+        )
+        ruta = tmp_path / "factura.xml"
+        ruta.write_text(firmar_xml(factura.to_xml(), certificado), encoding="utf-8")
+        return ruta
+
+    def test_leer_muestra_los_datos(self, xml_firmado, capsys):
+        assert main(["leer", str(xml_firmado)]) == 0
+
+        salida = capsys.readouterr().out
+        assert "Factura 001-001-000000042" in salida
+        assert "ACME S.A." in salida
+        assert "115.00" in salida
+        assert "Servicio" in salida
+
+    def test_leer_en_json(self, xml_firmado, capsys):
+        import json
+
+        assert main(["leer", str(xml_firmado), "--json"]) == 0
+
+        datos = json.loads(capsys.readouterr().out)
+        assert datos["tipo"] == "01"
+        assert datos["detalles"][0]["codigo_principal"] == "SRV1"
+        assert datos["totales"]["importe_total"] == "115.00"
+
+    def test_verificar_comprueba_todo(self, xml_firmado, capsys):
+        assert main(["verificar", str(xml_firmado)]) == 0
+
+        salida = capsys.readouterr().out
+        datos = json.loads(salida.split("✅")[0])
+        assert datos["ok"] is True
+        assert datos["firma"] is True
+        assert datos["clave_coincide"] is True
+        assert datos["totales_cuadran"] is True
+
+    def test_verificar_avisa_de_un_xml_alterado(self, xml_firmado, capsys):
+        alterado = xml_firmado.with_name("alterado.xml")
+        alterado.write_text(
+            xml_firmado.read_text(encoding="utf-8").replace(
+                "<importeTotal>115.00</importeTotal>", "<importeTotal>999.00</importeTotal>"
+            ),
+            encoding="utf-8",
+        )
+
+        assert main(["verificar", str(alterado)]) == 4
+
+        salida = capsys.readouterr()
+        assert "firma no es válida" in salida.err
+
+    def test_solo_firma_mantiene_el_comportamiento_anterior(self, xml_firmado, capsys):
+        assert main(["verificar", str(xml_firmado), "--solo-firma"]) == 0
+
+        datos = json.loads(capsys.readouterr().out)
+        assert datos["valido"] is True
+        assert "firmas" in datos
