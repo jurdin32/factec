@@ -110,7 +110,7 @@ from .sri import (
     existe_ruc,
 )
 
-__version__ = "1.8.3"
+__version__ = "1.8.4"
 
 __all__ = [
     "__version__",

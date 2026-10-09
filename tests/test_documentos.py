@@ -2425,3 +2425,28 @@ def test_el_comando_servicios_celery_dice_donde_esta_el_script(entorno_django):
     assert ruta.exists()
     assert ruta.name == "instalar_servicios_celery.sh"
     assert "instalar_servicios_celery.sh" in ruta.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="los servicios son de Linux")
+def test_el_comando_servicios_celery_enseña_los_comandos_del_proyecto(entorno_django, tmp_path):
+    """Los comandos exactos, con el módulo y el entorno virtual ya sustituidos."""
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    proyecto = _proyecto_falso(tmp_path)
+    salida = StringIO()
+
+    call_command(
+        "servicios_celery", "--comandos", "--proyecto-dir", str(proyecto),
+        "--venv", sys.prefix, "--modulo", "mi_proyecto", "--concurrencia", "2",
+        stdout=salida,
+    )
+
+    texto = salida.getvalue()
+    assert "Comandos para proyecto" in texto
+    assert f"{sys.prefix}/bin/celery -A mi_proyecto worker -l info -c 2" in texto
+    assert f"{sys.prefix}/bin/celery -A mi_proyecto beat -l info" in texto
+    assert f"{sys.prefix}/bin/celery -A mi_proyecto flower" in texto
+    assert f"{sys.prefix}/bin/python manage.py servicios_celery" in texto
+    assert "mi_proyecto" in texto and "celery del entorno virtual" in texto

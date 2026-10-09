@@ -266,6 +266,14 @@ ssh -L 5555:127.0.0.1:5555 usuario@servidor     # y abra http://127.0.0.1:5555
 Y para dejarlo expuesto, que sea con usuario y clave:
 `celery -A mi_proyecto flower --address=0.0.0.0 --basic_auth=juan:secreta`.
 
+En los ejemplos, `mi_proyecto` es el nombre **de su** proyecto (el de la carpeta con
+`settings.py`): si un comando le responde `The module mi_proyecto was not found`,
+sustitúyalo. Para no equivocarse:
+
+```bash
+python manage.py servicios_celery --comandos     # worker, beat y Flower, con sus nombres
+```
+
 En [docs/flower.md](docs/flower.md) está el día a día del panel: qué significa cada
 estado para una factura, cómo buscar una emisión concreta, el API para monitorizar
 y qué mirar cuando algo no aparece.
@@ -277,6 +285,7 @@ las rutas del proyecto ya resueltas:
 
 ```bash
 sudo python manage.py servicios_celery                 # crea y arranca los tres
+python manage.py servicios_celery --comandos           # los comandos, ya con sus nombres
 python manage.py servicios_celery --dry-run            # enseña lo que haría
 python manage.py servicios_celery --estado             # ¿están funcionando?
 sudo python manage.py servicios_celery --reiniciar     # tras desplegar

@@ -74,6 +74,7 @@ Acciones (una sola):
   (ninguna)          Crea las unidades, recarga systemd y las arranca
   --dry-run          Enseña las unidades y los comandos, sin tocar nada
   --estado           Muestra si Redis, el worker, el beat y Flower funcionan
+  --comandos         Enseña los comandos para este proyecto (con sus nombres)
   --reiniciar        Reinicia los servicios ya instalados
   --quitar           Para, deshabilita y borra las unidades
 
@@ -116,6 +117,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --estado) ACCION="estado" ;;
+    --comandos) ACCION="comandos" ;;
     --reiniciar) ACCION="reiniciar" ;;
     --quitar) ACCION="quitar" ;;
     --proyecto-dir) PROYECTO_DIR="${2:?falta la carpeta}"; shift ;;
@@ -416,6 +418,42 @@ reiniciar() {
   estado
 }
 
+comandos() {
+  # Los comandos exactos de ESTE proyecto: el módulo y el entorno virtual ya
+  # resueltos, para no tener que sustituir «mi_proyecto» a mano.
+  local python="$VENV/bin/python"
+  local celery="$VENV/bin/celery"
+  local flower="--address=$DIRECCION_FLOWER --port=$PUERTO_FLOWER"
+  [ -n "$AUTH_FLOWER" ] && flower="$flower --basic_auth=$AUTH_FLOWER"
+
+  printf '\n%s\n\n' "${NEGRITA}Comandos para $NOMBRE${APAGADO}"
+
+  printf '%s\n' "${NEGRITA}El broker${APAGADO} (Redis; el paquete lo busca en CELERY_BROKER_URL)"
+  manda "redis-server"
+  printf '\n'
+
+  printf '%s\n' "${NEGRITA}El worker${APAGADO} (ejecuta las tareas)"
+  manda "$celery -A $MODULO worker -l info -c $CONCURRENCIA"
+  printf '\n'
+
+  printf '%s\n' "${NEGRITA}Las tareas periódicas${APAGADO} (firma a las 7:00 y reintentos)"
+  manda "$celery -A $MODULO beat -l info"
+  printf '\n'
+
+  printf '%s\n' "${NEGRITA}El panel${APAGADO} (http://$DIRECCION_FLOWER:$PUERTO_FLOWER)"
+  manda "$celery -A $MODULO flower $flower"
+  printf '\n'
+
+  printf '%s\n' "${NEGRITA}Como servicios de Linux${APAGADO} (arrancan solos y se reinician)"
+  manda "sudo $python manage.py servicios_celery"
+  printf '\n'
+
+  printf '%s\n' "${NEGRITA}Comprobar, sin arrancar nada${APAGADO}"
+  manda "$python manage.py servicios_celery --estado"
+  manda "$celery -A $MODULO inspect registered"
+  printf '\n%s\n' "${AMARILLO}!${APAGADO} Use el celery del entorno virtual ($VENV): active el venv o llámelo por su ruta."
+}
+
 estado_procesos_sin_systemd() {
   # Sin systemd (macOS, contenedores…): se mira si los procesos están vivos.
   local patron
@@ -509,6 +547,12 @@ comprobar_redis() {
 # -------------------------------------------------------------------- main
 
 case "$ACCION" in
+  comandos)
+    # Sirve en cualquier sistema: solo imprime los comandos del proyecto.
+    detectar_proyecto
+    detectar_venv
+    comandos
+    ;;
   estado)
     # El estado se puede consultar también en macOS o en un contenedor, y no
     # necesita permisos: solo mira y cuenta.

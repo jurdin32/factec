@@ -11,6 +11,8 @@ las habilita al arranque y comprueba que Redis responde::
     sudo python manage.py servicios_celery --reiniciar      # tras desplegar
     sudo python manage.py servicios_celery --quitar         # los elimina
 
+    python manage.py servicios_celery --comandos            # los comandos, con sus nombres
+
 Detrás está el script ``instalar_servicios_celery.sh`` que viaja dentro del
 paquete (``python manage.py servicios_celery --ruta`` dice dónde está), así que
 también se puede copiar a otro servidor y ejecutar a mano.
@@ -48,6 +50,8 @@ class Command(BaseCommand):
         parser.add_argument("--ruta", action="store_true", help="Solo muestra dónde está el script.")
         parser.add_argument("--dry-run", action="store_true", help="Enseña lo que haría, sin tocar nada.")
         parser.add_argument("--estado", action="store_true", help="Muestra si los servicios funcionan.")
+        parser.add_argument("--comandos", action="store_true",
+                            help="Enseña los comandos de Celery de este proyecto, ya con sus nombres.")
         parser.add_argument("--reiniciar", action="store_true", help="Reinicia los servicios instalados.")
         parser.add_argument("--quitar", action="store_true", help="Para y borra los servicios.")
         parser.add_argument("--solo-archivos", action="store_true",
@@ -75,6 +79,7 @@ class Command(BaseCommand):
         argumentos: List[str] = []
         argumentos += _bandera(opciones, "--dry-run", opciones["dry_run"])
         argumentos += _bandera(opciones, "--estado", opciones["estado"])
+        argumentos += _bandera(opciones, "--comandos", opciones["comandos"])
         argumentos += _bandera(opciones, "--reiniciar", opciones["reiniciar"])
         argumentos += _bandera(opciones, "--quitar", opciones["quitar"])
         argumentos += _bandera(opciones, "--solo-archivos", opciones["solo_archivos"])

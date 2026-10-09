@@ -1001,6 +1001,15 @@ Celery es **opcional**:
 
 #### Configurarlo paso a paso
 
+> **`mi_proyecto` es un marcador**: ahí va el nombre de su proyecto (el de la
+> carpeta con `settings.py`, p. ej. `facturero`). Si copia un comando y le sale
+> `Unable to load celery application. The module mi_proyecto was not found`, es
+> justo eso. Para no equivocarse, pida los comandos ya resueltos:
+>
+> ```bash
+> python manage.py servicios_celery --comandos
+> ```
+
 Cuatro pasos, y todos los nombres se sustituyen por los de su proyecto
 («`mi_proyecto`»). Hay una copia lista para empezar en
 [examples/celery.py](../examples/celery.py).
@@ -1049,10 +1058,14 @@ CELERY_BEAT_SCHEDULE = {**planificador()}          # revisión diaria y reintent
 
 ```bash
 redis-server
-celery -A mi_proyecto worker -l info -c 4
+celery -A mi_proyecto worker -l info -c 4          # mi_proyecto → su proyecto
 celery -A mi_proyecto beat -l info                 # tareas periódicas
 celery -A mi_proyecto flower                       # panel
 ```
+
+> Ejecute `celery` **desde su entorno virtual** (actívelo o llame a
+> `./venv/bin/celery`): con un `celery` de otro entorno, Django y factec no
+> existen para él.
 
 | Ajuste de Django | Para qué | Por omisión |
 |---|---|---|
@@ -1180,6 +1193,7 @@ Redis responde:
 
 ```bash
 sudo python manage.py servicios_celery                      # crea y arranca
+python manage.py servicios_celery --comandos                # los comandos, ya con sus nombres
 python manage.py servicios_celery --dry-run                 # enseña y no toca nada
 python manage.py servicios_celery --estado                  # Redis, worker, beat y Flower
 sudo python manage.py servicios_celery --reiniciar           # tras desplegar
