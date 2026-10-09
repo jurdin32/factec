@@ -182,6 +182,12 @@ def emitir(
     comprobantes ni se consumen secuenciales de más. Con ``forzar=True`` se crea
     uno nuevo desde cero (por ejemplo, tras corregir los datos).
 
+    Si el comprobante registrado está **rechazado** (devuelto por el SRI o no
+    autorizado), se suelta su secuencial y se emite con uno **nuevo**: el SRI
+    registra el comprobante aunque lo devuelva, así que ese número ya no se puede
+    reusar y reenviarlo daría «ERROR SECUENCIAL REGISTRADO» en cada intento. El
+    comprobante rechazado se conserva como historial.
+
     Antes de firmar se **revisa** el comprobante (certificado vigente y del mismo
     RUC, fecha de emisión dentro del rango del SRI, totales y clave de acceso): si
     algo fallaría, se lanza :class:`~factec.excepciones.ErrorRevision` y no se emite
@@ -208,6 +214,19 @@ def emitir(
     tipo_comprobante = tipo or manejador.tipo
     # (la fecha con la que se emite la fija fijar_fecha_de_emision)
 
+    if forzar:
+        # Reemitir un comprobante que el SRI ya rechazó también necesita número
+        # nuevo: el rechazado dejó el suyo registrado en el SRI.
+        anterior = models.ComprobanteEmitido.para_objeto(obj, tipo_comprobante)
+        if anterior is not None and anterior.estado in models.ESTADOS_RECHAZADOS:
+            logger.info(
+                "Se reemite %s con forzar=True y su último comprobante fue rechazado (%s); "
+                "se suelta el secuencial %s.",
+                obj, anterior.estado, anterior.secuencial,
+            )
+            _soltar_secuencial(obj)
+            manejador._estrenar_secuencial = True  # noqa: SLF001 - ajuste deliberado
+
     if not forzar:
         existente = models.ComprobanteEmitido.para_objeto(obj, tipo_comprobante)
         if existente is not None:
@@ -220,14 +239,18 @@ def emitir(
                 return existente
             if existente.estado in models.ESTADOS_RECHAZADOS:
                 # El SRI lo devolvió (fecha fuera de rango, datos mal): el XML
-                # guardado ya no sirve. Se rehace con el documento corregido,
-                # reutilizando el secuencial ya reservado. El registro anterior
-                # se conserva como historial del rechazo.
+                # guardado ya no sirve. Además quedó **registrado** con ese
+                # secuencial, así que reenviarlo daría «ERROR SECUENCIAL
+                # REGISTRADO» y el documento no saldría nunca: se suelta el
+                # número y se rehace con uno nuevo, con los datos actuales. El
+                # registro anterior se conserva como historial del rechazo.
                 logger.info(
                     "El comprobante %s del documento %s fue rechazado por el SRI (%s); "
-                    "se genera uno nuevo con los datos actuales.",
-                    existente.clave_acceso, obj, existente.estado,
+                    "se suelta el secuencial %s y se genera uno nuevo con los datos actuales.",
+                    existente.clave_acceso, obj, existente.estado, existente.secuencial,
                 )
+                _soltar_secuencial(obj)
+                manejador._estrenar_secuencial = True  # noqa: SLF001 - ajuste deliberado
             elif _fecha_desactualizada(existente):
                 logger.info(
                     "El comprobante %s del documento %s quedó sin enviar del %s; se "
@@ -273,6 +296,17 @@ def _fijar_fecha_en_el_documento(obj: Any, fecha: Any) -> None:
         fijar(fecha)
     except Exception:  # pragma: no cover - modelos propios sin el campo
         logger.warning("No se pudo actualizar la fecha de emisión del documento %s", obj)
+
+
+def _soltar_secuencial(obj: Any) -> None:
+    """Olvida el secuencial del documento antes de rehacer un rechazado.
+
+    Los modelos del paquete exponen ``olvidar_secuencial()``; con modelos propios
+    que no lo tengan, no hay nada que soltar (se emite con el del documento).
+    """
+    soltar = getattr(obj, "olvidar_secuencial", None)
+    if callable(soltar):
+        soltar()
 
 
 def _asociar_en_modelo(obj: Any, registro: models.ComprobanteEmitido) -> None:

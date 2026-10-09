@@ -501,17 +501,17 @@ def test_el_admin_emite_la_factura(admin_cliente, factura, cliente_falso):
 
 
 def test_emitir_rehace_el_comprobante_devuelto(factura, cliente_falso):
-    """Un devuelto se rehace con los datos actuales, sin gastar otro secuencial.
+    """Un devuelto se rehace con los datos actuales y con un secuencial nuevo.
 
-    Reenviar el XML que el SRI ya devolvió daría el mismo error, así que el
-    paquete construye uno nuevo (con otra clave, porque cambia el código
-    numérico) y conserva el anterior como historial.
+    Reenviar el XML que el SRI ya devolvió daría el mismo error, y reutilizar su
+    secuencial tampoco vale: el SRI lo registró al recibirlo, así que responde
+    «ERROR SECUENCIAL REGISTRADO» y el documento no sale nunca. Se construye otro
+    con número nuevo y se conserva el anterior como historial.
     """
     from factec.django import models
 
     cliente_falso.estado_recepcion = "DEVUELTA"
     primero = factura.emitir(encolar=False)
-    secuenciales = models.Secuencial.objects.count()
     assert primero.estado == models.EstadoComprobante.DEVUELTO
 
     cliente_falso.estado_recepcion = "RECIBIDA"
@@ -519,8 +519,7 @@ def test_emitir_rehace_el_comprobante_devuelto(factura, cliente_falso):
 
     assert segundo.pk != primero.pk
     assert segundo.estado == models.EstadoComprobante.AUTORIZADO
-    assert models.Secuencial.objects.count() == secuenciales     # el mismo secuencial
-    assert primero.secuencial == segundo.secuencial
+    assert primero.secuencial != segundo.secuencial             # número nuevo
     assert int(factura.secuencial) == int(segundo.secuencial)
     # El rechazado queda como historial.
     assert models.ComprobanteEmitido.objects.filter(pk=primero.pk).exists()
@@ -1240,8 +1239,9 @@ def test_el_documento_con_fecha_futura_se_emite_con_la_fecha_de_hoy(
 def test_corregir_un_comprobante_devuelto_lo_rehace(documentos, factura, cliente_falso):
     """El caso real: corregir el documento y reemitir genera un XML nuevo.
 
-    Reenviar el XML rechazado repetiría el error, así que se construye otro con
-    los datos actuales y sin gastar un secuencial nuevo.
+    Reenviar el XML rechazado repetiría el error, y volver a usar su secuencial
+    también: el SRI lo registró al recibirlo. Así que se construye otro con los
+    datos actuales **y con número nuevo**; el rechazado queda como historial.
     """
     from datetime import timedelta
 
@@ -1262,7 +1262,7 @@ def test_corregir_un_comprobante_devuelto_lo_rehace(documentos, factura, cliente
     assert primero.estado == models.EstadoComprobante.DEVUELTO
     assert primero.fecha_emision == hoy
     assert f"<fechaEmision>{hoy:%d/%m/%Y}</fechaEmision>" in primero.xml_sin_firma
-    secuenciales = models.Secuencial.objects.count()
+    reservado = models.Secuencial.objects.count()
 
     # 2) Se corrige la fecha y se vuelve a emitir.
     factura.fecha_emision = hoy
@@ -1274,7 +1274,8 @@ def test_corregir_un_comprobante_devuelto_lo_rehace(documentos, factura, cliente
     assert segundo.autorizado
     assert f"<fechaEmision>{hoy:%d/%m/%Y}</fechaEmision>" in segundo.xml_sin_firma
     assert segundo.pk != primero.pk                     # no se reenvía el rechazado
-    assert models.Secuencial.objects.count() == secuenciales
+    assert primero.secuencial != segundo.secuencial     # ni se repite el número
+    assert models.Secuencial.objects.count() >= reservado
     assert int(factura.secuencial) == int(segundo.secuencial)
     assert models.ComprobanteEmitido.objects.filter(pk=primero.pk).exists()
 
@@ -1294,7 +1295,38 @@ def test_reintentar_tambien_rehace_un_devuelto(documentos, factura, cliente_fals
 
     assert segundo.autorizado
     assert segundo.pk != primero.pk
+    assert primero.secuencial != segundo.secuencial
     assert "Corregido tras la devolución" in segundo.xml_sin_firma
+
+
+def test_un_secuencial_registrado_no_se_reutiliza(documentos, factura, cliente_falso):
+    """El caso que dejaba una factura sin autorizar para siempre.
+
+    El SRI registra el comprobante aunque lo devuelva, así que su número queda
+    quemado: reintentar con él da «ERROR SECUENCIAL REGISTRADO» (45) una y otra
+    vez. Al rehacer un rechazado se estrena secuencial y el documento sale.
+    """
+    from factec.django import models
+
+    cliente_falso.estado_recepcion = "DEVUELTA"
+    primero = factura.emitir(encolar=False)
+    assert primero.estado == models.EstadoComprobante.DEVUELTO
+
+    # El documento se queda apuntando al número del comprobante rechazado.
+    factura.refresh_from_db()
+    quemado = primero.secuencial
+    assert str(factura.secuencial) == str(int(quemado))
+
+    cliente_falso.estado_recepcion = "RECIBIDA"
+    segundo = factura.reintentar(encolar=False)
+
+    assert segundo.secuencial != quemado          # no se reenvía el quemado
+    assert int(segundo.secuencial) > int(quemado)
+    assert segundo.autorizado
+    factura.refresh_from_db()
+    assert str(factura.secuencial) == str(int(segundo.secuencial))
+    # El rechazado se conserva como historial con su número.
+    assert models.ComprobanteEmitido.objects.filter(secuencial=quemado).exists()
 
 
 # ------------------------------------ archivos: XML y respuestas del SRI

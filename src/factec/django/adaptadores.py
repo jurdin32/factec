@@ -263,12 +263,18 @@ class AdaptadorComprobante:
 
     comprobante_clase: Type[Comprobante] = Factura
 
+    #: Con ``True`` no se reutiliza el secuencial que traiga el documento.
+    #: Lo pone el paquete al rehacer un comprobante rechazado: el SRI ya registró
+    #: aquel número y respondería «ERROR SECUENCIAL REGISTRADO» en cada intento.
+    _estrenar_secuencial: bool = False
+
     def __init__(self, configuracion: Any = None, emisor: Any = None,
                  ambiente: Any = None, fecha_emision: Any = None) -> None:
         self.configuracion = configuracion
         self._emisor = emisor
         self._ambiente = ambiente
         self._fecha_emision = fecha_emision
+        self._estrenar_secuencial = False
 
     # ------------------------------------------------------ datos comunes
 
@@ -574,7 +580,9 @@ class AdaptadorComprobante:
             "fecha_emision": self.fecha_emision(obj),
             "info_adicional": self.info_adicional(obj),
         }
-        secuencial = self.secuencial(obj)
+        # El secuencial del documento se respeta salvo que el paquete pida
+        # estrenar uno (al rehacer un comprobante que el SRI ya registró).
+        secuencial = None if self._estrenar_secuencial else self.secuencial(obj)
         if secuencial:
             parametros["secuencial"] = secuencial
         else:

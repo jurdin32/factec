@@ -263,11 +263,14 @@ Si el SRI devuelve un comprobante (`DEVUELTO`) o lo rechaza en la autorización
 Al corregir el documento y volver a pulsar **Emitir** (o `emitir()`), el paquete:
 
 * construye un comprobante **nuevo** con los datos actuales y otra clave de acceso;
-* reutiliza el **mismo secuencial** del documento, sin gastar otro;
+* **estrena secuencial**: el SRI registra el comprobante aunque lo devuelva, así que
+  el número del rechazado queda quemado y reenviarlo responde «ERROR SECUENCIAL
+  REGISTRADO» (45) en cada intento, sin salida. El documento suelta ese número
+  (`olvidar_secuencial()`) y se reserva el siguiente del contador;
 * conserva el comprobante rechazado como historial (con sus `mensajes` del SRI).
 
-`reintentar()` hace lo mismo: con un estado rechazado rehace el comprobante en
-lugar de reenviar el XML devuelto.
+`reintentar()` hace lo mismo: con un estado rechazado rehace el comprobante (con
+número nuevo) en lugar de reenviar el XML devuelto.
 
 #### Cómo se emite
 
@@ -878,7 +881,9 @@ print(registro.estado, registro.xml_autorizado)
 `emitir()` es **idempotente por documento**: si esa venta ya tiene un
 comprobante, se reutiliza y solo se reintenta el envío; así no se duplican
 comprobantes ni se consumen secuenciales de más. Con `forzar=True` se crea uno
-nuevo desde cero (por ejemplo tras corregir los datos).
+nuevo desde cero (por ejemplo tras corregir los datos). Si el comprobante que
+tenía estaba **rechazado**, el nuevo se emite siempre con un secuencial nuevo
+(el SRI ya registró el anterior), tanto con `forzar=True` como sin él.
 
 El vínculo (y por tanto la idempotencia) necesita un **modelo de Django
 guardado**. Con un objeto cualquiera —un diccionario, un `dataclass`— el
@@ -1028,7 +1033,9 @@ venta.comprobantes_sri.filter(estado="AUTORIZADO").exists()
 
 `emitir_lote()` y `reintentar()` cubren la operación normal: emita en lote lo
 pendiente y reintente lo que quedó en `ERROR` o `EN_PROCESO` sin volver a
-construir el XML ni pedir otro secuencial.
+construir el XML ni pedir otro secuencial. La excepción son los **rechazados**
+(`DEVUELTO` o `NO_AUTORIZADO`): ahí el comprobante se rehace y sí se estrena
+secuencial, porque el SRI ya registró el del rechazo.
 
 ### Celery
 

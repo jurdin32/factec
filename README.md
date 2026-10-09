@@ -154,8 +154,9 @@ servidor del SRI, que está en Ecuador. El paquete lo comprueba antes de enviar 
 el admin no deja guardar un comprobante fuera de esa ventana.
 
 Si un comprobante quedó en **Devuelto**, corrija el dato y vuelva a pulsar
-**«Emitir»**: se genera uno nuevo con los datos corregidos (el rechazado se
-conserva como historial) y **no** se gasta otro secuencial.
+**«Emitir»**: se genera uno nuevo con los datos corregidos y con un **secuencial
+nuevo** (el SRI registró el número del devuelto, así que reenviarlo daría «ERROR
+SECUENCIAL REGISTRADO»). El rechazado se conserva como historial.
 
 ```python
 from factec.sri.fechas import DIAS_TOLERANCIA, hoy_en_ecuador, validar_fecha_emision

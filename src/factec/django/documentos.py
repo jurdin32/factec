@@ -509,6 +509,21 @@ class DocumentoElectronico(models.Model):
 
         return facturacion.reintentar(self, **kwargs)
 
+    def olvidar_secuencial(self, guardar: bool = True) -> "DocumentoElectronico":
+        """Suelta el secuencial que el documento tenía reservado.
+
+        El SRI registra el comprobante aunque lo devuelva, así que ese número ya
+        no se puede volver a usar: reenviarlo da «ERROR SECUENCIAL REGISTRADO» y
+        el documento no sale nunca. Lo llama el paquete antes de rehacer un
+        comprobante rechazado, para que el siguiente intento reserve uno nuevo.
+        """
+        if not self.secuencial:
+            return self
+        self.secuencial = ""
+        if guardar and self.pk:
+            self.save(update_fields=["secuencial", "actualizado"])
+        return self
+
     def asociar_comprobante(self, registro: Any, guardar: bool = True) -> "DocumentoElectronico":
         """Guarda el enlace con el comprobante emitido y su secuencial.
 

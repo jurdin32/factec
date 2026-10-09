@@ -858,15 +858,17 @@ def test_emitir_sin_vincular_no_guarda_el_enlace(configuracion, cliente_falso, d
 def test_emitir_rehace_el_comprobante_devuelto(configuracion, cliente_falso, documento):
     """Tras un «Devuelto» se rehace: reenviar el mismo XML repetiría el error.
 
-    Lo que no debe pasar es que se queme otro secuencial: se reutiliza el que ya
-    tenía reservado el documento.
+    El secuencial sí se quema: el SRI lo registró al recibir el comprobante, así
+    que el nuevo intento tiene que estrenar uno.
     """
     from factec.django import facturacion, models
 
     cliente_falso.estado_recepcion = "DEVUELTA"
     primero = facturacion.emitir(documento, encolar=False, intentos=1, espera=0)
     assert primero.estado == models.EstadoComprobante.DEVUELTO
-    secuenciales = models.Secuencial.objects.count()
+    # El documento de prueba trae un secuencial fijo, así que el contador del
+    # paquete sigue sin usarse: si al rehacer no se estrena número, no aparecerá.
+    assert not models.Secuencial.objects.exists()
 
     cliente_falso.estado_recepcion = "RECIBIDA"
     cliente_falso.llamadas.clear()
@@ -874,7 +876,9 @@ def test_emitir_rehace_el_comprobante_devuelto(configuracion, cliente_falso, doc
 
     assert segundo.pk != primero.pk
     assert segundo.autorizado
-    assert models.Secuencial.objects.count() == secuenciales
+    # Rehacer un rechazado sí reserva: el número del devuelto queda quemado.
+    assert models.Secuencial.objects.count() == 1
+    assert models.Secuencial.objects.first().ultimo == 1
     assert cliente_falso.llamadas != []
 
 
