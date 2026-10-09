@@ -496,8 +496,13 @@ def test_el_admin_emite_la_factura(admin_cliente, factura, cliente_falso):
 # ------------------------------------------------------------------ detalles
 
 
-def test_emitir_reutiliza_el_borrador_pendiente(factura, cliente_falso):
-    """Un envío fallido no gasta otro secuencial."""
+def test_emitir_rehace_el_comprobante_devuelto(factura, cliente_falso):
+    """Un devuelto se rehace con los datos actuales, sin gastar otro secuencial.
+
+    Reenviar el XML que el SRI ya devolvió daría el mismo error, así que el
+    paquete construye uno nuevo (con otra clave, porque cambia el código
+    numérico) y conserva el anterior como historial.
+    """
     from factec.django import models
 
     cliente_falso.estado_recepcion = "DEVUELTA"
@@ -508,8 +513,13 @@ def test_emitir_reutiliza_el_borrador_pendiente(factura, cliente_falso):
     cliente_falso.estado_recepcion = "RECIBIDA"
     segundo = factura.emitir(encolar=False)
 
-    assert segundo.pk == primero.pk
-    assert models.Secuencial.objects.count() == secuenciales
+    assert segundo.pk != primero.pk
+    assert segundo.estado == models.EstadoComprobante.AUTORIZADO
+    assert models.Secuencial.objects.count() == secuenciales     # el mismo secuencial
+    assert primero.secuencial == segundo.secuencial
+    assert int(factura.secuencial) == int(segundo.secuencial)
+    # El rechazado queda como historial.
+    assert models.ComprobanteEmitido.objects.filter(pk=primero.pk).exists()
 
 
 def test_el_xml_sin_firmar_se_puede_pedir_sin_emitir(factura):
@@ -1096,3 +1106,131 @@ def test_el_chequeo_avisa_de_migraciones_pendientes(configuracion, monkeypatch):
 
     assert "sri_fe.W008" in codigos
     assert "sri_fe.E009" not in codigos
+
+
+# ------------------------------- fecha de emisión (ventana que exige el SRI)
+
+
+def test_el_admin_no_deja_guardar_una_factura_con_fecha_futura(documentos, cliente):
+    """El error sale en el propio campo, antes de gastar un secuencial."""
+    from datetime import timedelta
+
+    from django.core.exceptions import ValidationError
+
+    from factec.sri.fechas import hoy_en_ecuador
+
+    factura = documentos.Factura(
+        receptor=cliente, fecha_emision=hoy_en_ecuador() + timedelta(days=1)
+    )
+    with pytest.raises(ValidationError) as error:
+        factura.full_clean()
+
+    mensaje = " ".join(error.value.message_dict["fecha_emision"])
+    assert "FECHA EMISIÓN EXTEMPORANEA" in mensaje
+    assert "posterior a hoy" in mensaje
+
+
+def test_el_admin_no_deja_guardar_una_factura_de_mas_de_90_dias(documentos, cliente, monkeypatch):
+    from datetime import timedelta
+
+    from django.core.exceptions import ValidationError
+
+    from factec.sri import fechas
+
+    monkeypatch.setattr(fechas, "DIAS_TOLERANCIA", 90)
+    factura = documentos.Factura(
+        receptor=cliente, fecha_emision=fechas.hoy_en_ecuador() - timedelta(days=91)
+    )
+    with pytest.raises(ValidationError) as error:
+        factura.full_clean()
+
+    assert "tolerancia" in " ".join(error.value.message_dict["fecha_emision"])
+
+
+def test_un_comprobante_autorizado_se_puede_seguir_editando(
+    documentos, factura, cliente_falso, monkeypatch
+):
+    """La validación de la fecha no debe impedir editar algo ya autorizado."""
+    from datetime import timedelta
+
+    from factec.sri import fechas
+
+    factura.emitir(encolar=False)
+    assert factura.comprobante.autorizado
+
+    monkeypatch.setattr(fechas, "DIAS_TOLERANCIA", 90)
+    factura.fecha_emision = fechas.hoy_en_ecuador() - timedelta(days=200)
+    factura.observaciones = "Nota interna posterior"
+    factura.full_clean()          # no debe quejarse
+
+
+def test_un_comprobante_no_se_puede_emitir_con_fecha_futura(documentos, factura):
+    """Ni siquiera por la puerta de atrás: el XML se niega a construirse."""
+    from datetime import timedelta
+
+    from factec.excepciones import ErrorValidacion
+    from factec.sri.fechas import hoy_en_ecuador
+
+    factura.fecha_emision = hoy_en_ecuador() + timedelta(days=1)
+    factura.save()
+
+    with pytest.raises(ErrorValidacion, match="FECHA EMISIÓN EXTEMPORANEA"):
+        factura.emitir(encolar=False)
+
+
+def test_corregir_un_comprobante_devuelto_lo_rehace(documentos, factura, cliente_falso):
+    """El caso real: corregir el documento y reemitir genera un XML nuevo.
+
+    Reenviar el XML rechazado repetiría el error, así que se construye otro con
+    los datos actuales y sin gastar un secuencial nuevo.
+    """
+    from datetime import timedelta
+
+    from factec.django import models
+    from factec.sri.fechas import hoy_en_ecuador
+
+    hoy = hoy_en_ecuador()
+    ayer = hoy - timedelta(days=1)
+
+    # 1) Se emite y el SRI lo devuelve (por ejemplo, por estructura).
+    factura.fecha_emision = ayer
+    factura.save()
+
+    cliente_falso.estado_recepcion = "DEVUELTA"
+    primero = factura.emitir(encolar=False)
+
+    assert primero.estado == models.EstadoComprobante.DEVUELTO
+    assert f"<fechaEmision>{ayer:%d/%m/%Y}</fechaEmision>" in primero.xml_sin_firma
+    secuenciales = models.Secuencial.objects.count()
+
+    # 2) Se corrige la fecha y se vuelve a emitir.
+    factura.fecha_emision = hoy
+    factura.save()
+
+    cliente_falso.estado_recepcion = "RECIBIDA"
+    segundo = factura.emitir(encolar=False)
+
+    assert segundo.autorizado
+    assert f"<fechaEmision>{hoy:%d/%m/%Y}</fechaEmision>" in segundo.xml_sin_firma
+    assert segundo.pk != primero.pk                     # no se reenvía el rechazado
+    assert models.Secuencial.objects.count() == secuenciales
+    assert int(factura.secuencial) == int(segundo.secuencial)
+    assert models.ComprobanteEmitido.objects.filter(pk=primero.pk).exists()
+
+
+def test_reintentar_tambien_rehace_un_devuelto(documentos, factura, cliente_falso):
+    from factec.django import models
+
+    cliente_falso.estado_recepcion = "DEVUELTA"
+    primero = factura.emitir(encolar=False)
+    assert primero.estado == models.EstadoComprobante.DEVUELTO
+
+    factura.observaciones = "Corregido tras la devolución"
+    factura.save()
+
+    cliente_falso.estado_recepcion = "RECIBIDA"
+    segundo = factura.reintentar(encolar=False)
+
+    assert segundo.autorizado
+    assert segundo.pk != primero.pk
+    assert "Corregido tras la devolución" in segundo.xml_sin_firma

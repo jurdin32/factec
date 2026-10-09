@@ -141,12 +141,23 @@ def emitir(
                 )
                 _asociar_en_modelo(obj, existente)
                 return existente
-            logger.info(
-                "El documento %s ya tiene el comprobante %s (%s); se reintenta.",
-                obj, existente.clave_acceso, existente.estado,
-            )
-            _asociar_en_modelo(obj, existente)
-            return _enviar(existente, encolar=encolar, intentos=intentos, espera=espera)
+            if existente.estado in models.ESTADOS_RECHAZADOS:
+                # El SRI lo devolvió (fecha fuera de rango, datos mal): el XML
+                # guardado ya no sirve. Se rehace con el documento corregido,
+                # reutilizando el secuencial ya reservado. El registro anterior
+                # se conserva como historial del rechazo.
+                logger.info(
+                    "El comprobante %s del documento %s fue rechazado por el SRI (%s); "
+                    "se genera uno nuevo con los datos actuales.",
+                    existente.clave_acceso, obj, existente.estado,
+                )
+            else:
+                logger.info(
+                    "El documento %s ya tiene el comprobante %s (%s); se reintenta.",
+                    obj, existente.clave_acceso, existente.estado,
+                )
+                _asociar_en_modelo(obj, existente)
+                return _enviar(existente, encolar=encolar, intentos=intentos, espera=espera)
 
     comprobante = manejador.comprobante(obj)
     registro = services.registrar(comprobante, guardar_xml=guardar_xml)
@@ -249,6 +260,10 @@ def reintentar(
 
     Reutiliza el XML ya registrado (y firmado, si lo estaba), sin volver a
     construir el comprobante ni pedir un secuencial nuevo.
+
+    Si el SRI ya lo había **rechazado** (``DEVUELTO`` o ``NO_AUTORIZADO``), se
+    rehace el comprobante con los datos actuales del documento: reenviar el mismo
+    XML devolvería el mismo error.
     """
     registro = models.ComprobanteEmitido.para_objeto(obj, tipo)
     if registro is None:
@@ -258,4 +273,10 @@ def reintentar(
         )
     if registro.autorizado:
         return registro
+    if registro.estado in models.ESTADOS_RECHAZADOS:
+        logger.info(
+            "El comprobante %s fue rechazado (%s); se rehace con los datos actuales.",
+            registro.clave_acceso, registro.estado,
+        )
+        return emitir(obj, tipo=tipo, encolar=encolar, intentos=intentos, espera=espera)
     return _enviar(registro, encolar=encolar, intentos=intentos, espera=espera)

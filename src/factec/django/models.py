@@ -553,6 +553,14 @@ class ComprobanteEmitido(models.Model):
         return bool(comprobante and comprobante.autorizado)
 
 
+#: Estados en los que el SRI rechazó el comprobante: hay que corregir y rehacerlo.
+ESTADOS_RECHAZADOS = frozenset(
+    {
+        EstadoComprobante.DEVUELTO,
+        EstadoComprobante.NO_AUTORIZADO,
+    }
+)
+
 #: Estados desde los que ya no tiene sentido reintentar automáticamente.
 ESTADOS_FINALES = frozenset(
     {

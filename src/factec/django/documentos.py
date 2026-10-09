@@ -44,7 +44,9 @@ from ..catalogos import (
     TipoSujetoRetenido,
 )
 from ..comprobantes import calcular_totales
+from ..excepciones import ErrorValidacion
 from ..modelos import Detalle, Impuesto, cuantizar
+from ..sri.fechas import validar_fecha_emision
 from .campos_adicionales import (
     MAXIMO_CAMPOS_ADICIONALES,
     MAXIMO_DATOS_ADICIONALES,
@@ -330,6 +332,18 @@ class DocumentoElectronico(models.Model):
             validar_cantidad(campos, MAXIMO_CAMPOS_ADICIONALES, "«infoAdicional»")
         except ValidationError as error:
             raise ValidationError({"informacion_adicional": error.messages}) from error
+
+        # Un comprobante ya autorizado no se reemite: se puede seguir editando
+        # (por ejemplo las observaciones) sin que moleste la fecha.
+        if self.fecha_emision and not self.ya_autorizado():
+            try:
+                validar_fecha_emision(self.fecha_emision)
+            except ErrorValidacion as error:
+                raise ValidationError({"fecha_emision": str(error)}) from error
+
+    def ya_autorizado(self) -> bool:
+        """¿Ya tiene un comprobante autorizado por el SRI?"""
+        return bool(self.comprobante_id and self.comprobante and self.comprobante.autorizado)
 
     # ------------------------------------------------------------------ estado
 

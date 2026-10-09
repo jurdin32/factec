@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 from .consulta_ruc import URL_CATASTRO, URL_EXISTE, DatosRuc, consultar_ruc, existe_ruc
+from .fechas import (
+    DESFASE_ECUADOR,
+    DIAS_TOLERANCIA,
+    MENSAJE_EXTEMPORANEA,
+    hoy_en_ecuador,
+    validar_fecha_emision,
+)
 from .endpoints import (
     AMBIENTES,
     HOSTS,
@@ -29,6 +36,11 @@ from .soap import (
 
 __all__ = [
     "ClienteSRI",
+    "DIAS_TOLERANCIA",
+    "DESFASE_ECUADOR",
+    "MENSAJE_EXTEMPORANEA",
+    "hoy_en_ecuador",
+    "validar_fecha_emision",
     "Mensaje",
     "RespuestaRecepcion",
     "RespuestaAutorizacion",

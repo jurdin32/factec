@@ -76,6 +76,12 @@ FACTURACION_ELECTRONICA = {
     "AMBIENTE": 1,            # 1 = pruebas, 2 = producción (respaldo del admin)
     "GUARDAR_XML": True,      # guarda los XML en la base de datos
 }
+
+# El SRI está en Ecuador y compara la fecha de emisión con la suya. Si deja el
+# valor por omisión de Django (UTC), a partir de las 19:00 el admin muestra el día
+# siguiente y es fácil emitir con fecha de mañana (el SRI lo devuelve).
+LANGUAGE_CODE = "es-ec"
+TIME_ZONE = "America/Guayaquil"
 ```
 
 ### 3. Cree las tablas (obligatorio)
@@ -110,6 +116,24 @@ Admin: <http://127.0.0.1:8000/admin/> → **Facturación electrónica (SRI)**
 3. **Comprobantes** → cree una **factura**, añada líneas *eligiendo el producto*
    (la descripción, el precio y el IVA se completan solos) y pulse
    **«Emitir: firmar, enviar al SRI y esperar autorización»**.
+
+### Si el SRI devuelve «FECHA EMISIÓN EXTEMPORANEA» (mensaje 65)
+
+La fecha de emisión **no puede ser futura** ni tener **más de 90 días** (la
+tolerancia de 129600 minutos que publica el SRI). Se compara con la fecha del
+servidor del SRI, que está en Ecuador. El paquete lo comprueba antes de enviar y
+el admin no deja guardar un comprobante fuera de esa ventana.
+
+Si un comprobante quedó en **Devuelto**, corrija el dato y vuelva a pulsar
+**«Emitir»**: se genera uno nuevo con los datos corregidos (el rechazado se
+conserva como historial) y **no** se gasta otro secuencial.
+
+```python
+from factec.sri.fechas import DIAS_TOLERANCIA, hoy_en_ecuador, validar_fecha_emision
+
+hoy_en_ecuador()                 # la fecha con la que compara el SRI
+validar_fecha_emision(fecha)     # lanza ErrorValidacion si el SRI la rechazaría
+```
 
 ---
 
@@ -191,7 +215,7 @@ resultado = emisor.emitir(factura)
 | [docs/django.md](docs/django.md) | La app de Django: modelos, admin, adaptadores, Celery y ajustes |
 | [docs/prueba-real.md](docs/prueba-real.md) | Emitir de verdad contra el ambiente de pruebas del SRI |
 | [examples/](examples/) | Scripts listos para ejecutar |
-| [tests/](tests/) | 351 pruebas, incluida la validación contra los XSD oficiales |
+| [tests/](tests/) | 368 pruebas, incluida la validación contra los XSD oficiales |
 
 ---
 

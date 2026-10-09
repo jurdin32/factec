@@ -89,6 +89,16 @@ Errores frecuentes en pruebas:
   al RUC del emisor.
 - **Clave de acceso no válida** → revisa serie, secuencial y dígito verificador.
 
+### Errores frecuentes del ambiente de pruebas
+
+| Mensaje del SRI | Qué significa |
+|---|---|
+| `FECHA EMISIÓN EXTEMPORANEA` (65) | La fecha de emisión es futura o de más de 90 días. El paquete ya lo valida: revise `TIME_ZONE` (debe ser `America/Guayaquil`) y la fecha del comprobante |
+| `CLAVE ACCESO REGISTRADA` | Esa clave ya se envió: el paquete es idempotente por documento, no lo reenvía |
+| `ARCHIVO NO CUMPLE ESTRUCTURA XML` (35) | El XML no cuadra con el XSD: revise los catálogos del SRI que usó |
+| `FIRMA INVÁLIDA` | El certificado no es RSA, la contraseña es incorrecta o el XML se modificó después de firmarlo |
+| `CERTIFICADO NO VIGENTE` | La firma electrónica está vencida: el SRI no acepta el comprobante |
+
 ### Antes de pasar a producción
 
 - Cambia `--ambiente` a producción (2) y usa un RUC habilitado para producción.

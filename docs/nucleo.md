@@ -99,6 +99,34 @@ Cada comprobante genera su clave automáticamente la primera vez que se pide
 
 ---
 
+## Fecha de emisión (ventana que exige el SRI)
+
+El SRI rechaza el comprobante con el mensaje 65, «FECHA EMISIÓN EXTEMPORANEA»,
+cuando la fecha de emisión es posterior a la del servidor del SRI o está fuera del
+rango de tolerancia (**129600 minutos = 90 días**). Como el servidor del SRI está
+en Ecuador (UTC-5), comparar contra la hora local de su servidor puede fallar por
+un día: a las 20:00 en Quito ya es el día siguiente en UTC.
+
+El paquete lo comprueba al construir el XML, sin gastar secuencial ni llamar al
+SRI:
+
+```python
+from factec.sri.fechas import DIAS_TOLERANCIA, hoy_en_ecuador, validar_fecha_emision
+
+hoy_en_ecuador()                          # la fecha con la que compara el SRI
+validar_fecha_emision(hoy_en_ecuador())   # sin problema
+validar_fecha_emision(hoy_en_ecuador().replace(day=...))   # lanza ErrorValidacion
+```
+
+| Ayuda | Para qué |
+|---|---|
+| `hoy_en_ecuador()` | Hoy según el reloj del SRI (UTC-5 fijo) |
+| `validar_fecha_emision(fecha)` | Lanza `ErrorValidacion` si el SRI la rechazaría |
+| `DIAS_TOLERANCIA` / `MINUTOS_TOLERANCIA` | 90 días / 129600 minutos |
+
+Si prefiere emitir de todos modos (por ejemplo para reproducir un error), ponga
+`VALIDAR_FECHA_EMISION = False` en la clase o instancia del comprobante.
+
 ## Firma electrónica (XAdES-BES)
 
 ```python

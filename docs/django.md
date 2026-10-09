@@ -51,6 +51,22 @@ Eso crea las tablas de la app (usa el *label* `sri_fe`):
 No hay que generar migraciones en el proyecto: vienen dentro del paquete, así que
 `migrate` deja la base de datos lista.
 
+#### Ponga la zona horaria de Ecuador
+
+```python
+LANGUAGE_CODE = "es-ec"
+TIME_ZONE = "America/Guayaquil"
+USE_TZ = True
+```
+
+El SRI compara la ``fechaEmision`` con la fecha de **su** servidor, que está en
+Ecuador. Con el valor por omisión de Django (`TIME_ZONE = "UTC"`, `en-us`) el admin
+muestra el día siguiente a partir de las 19:00 hora de Ecuador, así que es fácil
+emitir con fecha de mañana y recibir un «Devuelto» por `FECHA EMISIÓN
+EXTEMPORANEA` (mensaje 65). El paquete valida la fecha igualmente —no se puede
+guardar ni emitir un comprobante con fecha futura o de más de 90 días—, pero más
+vale no ver el error.
+
 #### Dónde se guarda el certificado `.p12`
 
 El archivo de firma se guarda en un `FileField`, o sea dentro de `MEDIA_ROOT`. Un
@@ -192,6 +208,19 @@ un precio 0 ni un IVA que no corresponda; si se escribe algo a mano, se respeta.
 
 Los importes del modelo se calculan con el mismo código que el XML (no hay dos
 verdades): `factura.total` es el `importeTotal` que se envía al SRI.
+
+#### Comprobantes devueltos por el SRI
+
+Si el SRI devuelve un comprobante (`DEVUELTO`) o lo rechaza en la autorización
+(`NO_AUTORIZADO`), el XML guardado ya no sirve: reenviarlo daría el mismo error.
+Al corregir el documento y volver a pulsar **Emitir** (o `emitir()`), el paquete:
+
+* construye un comprobante **nuevo** con los datos actuales y otra clave de acceso;
+* reutiliza el **mismo secuencial** del documento, sin gastar otro;
+* conserva el comprobante rechazado como historial (con sus `mensajes` del SRI).
+
+`reintentar()` hace lo mismo: con un estado rechazado rehace el comprobante en
+lugar de reenviar el XML devuelto.
 
 #### Cómo se emite
 

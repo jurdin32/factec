@@ -28,6 +28,7 @@ from ..clave_acceso import (
     validar_clave_acceso,
 )
 from ..excepciones import ErrorValidacion
+from ..sri.fechas import validar_fecha_emision
 from ..modelos import Emisor, InfoAdicional, a_decimal, cuantizar
 
 __all__ = [
@@ -131,6 +132,8 @@ class Comprobante:
     VERSION: ClassVar[str] = ""
     #: Etiqueta del elemento raíz.
     ETIQUETA: ClassVar[str] = ""
+    #: Comprobar que la fecha de emisión la acepte el SRI (futura/90 días).
+    VALIDAR_FECHA_EMISION: ClassVar[bool] = True
 
     def __post_init__(self) -> None:
         if not self.ETIQUETA:
@@ -275,5 +278,7 @@ class Comprobante:
         if emision not in ("1", "2"):
             raise ErrorValidacion(f"Tipo de emisión inválido: {self.tipo_emision!r}")
         self.secuencial_normalizado  # lanza si el secuencial no es válido
+        if self.VALIDAR_FECHA_EMISION:
+            validar_fecha_emision(self.fecha_emision)
         if self.clave_acceso and not validar_clave_acceso(self.clave_acceso):
             raise ErrorValidacion(f"La clave de acceso no es válida: {self.clave_acceso!r}")

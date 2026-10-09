@@ -486,3 +486,29 @@ def _superusuario():
     usuario.set_password("clave")
     usuario.save()
     return usuario
+
+
+#: Fecha de referencia de los datos de prueba escritos a mano (ver abajo).
+FECHA_DE_LAS_PRUEBAS = date(2026, 10, 9)
+
+
+@pytest.fixture(autouse=True)
+def fecha_de_referencia(monkeypatch):
+    """Fija el «hoy» del SRI para que las pruebas no caduquen.
+
+    Muchas pruebas usan fechas escritas a mano (2026-09-15, 2026-10-08…) y el
+    paquete rechaza las emisiones de más de 90 días: sin esto, la suite empezaría
+    a fallar sola con el paso del tiempo. La referencia es la fecha real (nunca
+    anterior a los datos de prueba) y la tolerancia se amplía.
+
+    Las pruebas que comprueban la ventana pasan ``hoy`` explícitamente.
+    """
+    from factec.sri import fechas
+
+    real = fechas.hoy_en_ecuador
+    monkeypatch.setattr(
+        fechas,
+        "hoy_en_ecuador",
+        lambda momento=None: max(real(momento), FECHA_DE_LAS_PRUEBAS),
+    )
+    monkeypatch.setattr(fechas, "DIAS_TOLERANCIA", 365 * 100)

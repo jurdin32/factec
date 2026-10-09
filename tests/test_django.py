@@ -855,9 +855,13 @@ def test_emitir_sin_vincular_no_guarda_el_enlace(configuracion, cliente_falso, d
     assert facturacion.registro_de(documento) is None
 
 
-def test_emitir_reutiliza_un_borrador_pendiente(configuracion, cliente_falso, documento):
-    """Un intento fallido previo no debe quemar otro secuencial."""
-    from factec.django import facturacion, models, services
+def test_emitir_rehace_el_comprobante_devuelto(configuracion, cliente_falso, documento):
+    """Tras un «Devuelto» se rehace: reenviar el mismo XML repetiría el error.
+
+    Lo que no debe pasar es que se queme otro secuencial: se reutiliza el que ya
+    tenía reservado el documento.
+    """
+    from factec.django import facturacion, models
 
     cliente_falso.estado_recepcion = "DEVUELTA"
     primero = facturacion.emitir(documento, encolar=False, intentos=1, espera=0)
@@ -868,9 +872,10 @@ def test_emitir_reutiliza_un_borrador_pendiente(configuracion, cliente_falso, do
     cliente_falso.llamadas.clear()
     segundo = facturacion.emitir(documento, encolar=False, intentos=1, espera=0)
 
-    assert segundo.pk == primero.pk
+    assert segundo.pk != primero.pk
+    assert segundo.autorizado
     assert models.Secuencial.objects.count() == secuenciales
-    assert cliente_falso.llamadas == []  # DEVUELTO ya no se reprocesa
+    assert cliente_falso.llamadas != []
 
 
 def test_reintentar_sin_registro_avisa(configuracion, cliente_falso, documento):
