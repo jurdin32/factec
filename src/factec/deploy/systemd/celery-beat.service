@@ -2,11 +2,12 @@
 #
 # Cópielo al servidor, sustituya los marcadores y actívelo:
 #
-#   sudo cp celery-beat.service /etc/systemd/system/facturero-celery-beat.service
-#   sudo systemctl daemon-reload && sudo systemctl enable --now facturero-celery-beat
+#   sudo cp celery-beat.service /etc/systemd/system/__NOMBRE__-celery-beat.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now __NOMBRE__-celery-beat
 #
-# Marcadores: __USUARIO__ __GRUPO__ __PROYECTO__ __MODULO__ __VENV__ __NOMBRE__
-#   __NOMBRE__ es el nombre que tendrá el archivo de estado (p. ej. facturero)
+# Lo único que hay que sustituir a mano son los datos del servidor:
+#   __USUARIO__ __GRUPO__ __PROYECTO__ __VENV__        (lo demás ya viene puesto)
+#   __NOMBRE__ es el nombre que tendrá el archivo de estado (p. ej. el de la carpeta con settings.py)
 #
 # Beat revisa la firma electrónica todos los días a las 7:00 y reintenta cada
 # 10 minutos los comprobantes que quedaron a medias (CELERY_BEAT_SCHEDULE, que se

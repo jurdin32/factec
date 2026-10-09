@@ -2,16 +2,15 @@
 #
 # Cópielo al servidor, sustituya los marcadores y actívelo:
 #
-#   sudo cp celery-worker.service /etc/systemd/system/facturero-celery-worker.service
+#   sudo cp celery-worker.service /etc/systemd/system/__NOMBRE__-celery-worker.service
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now facturero-celery-worker
-#   journalctl -u facturero-celery-worker -f        # sus logs
+#   sudo systemctl enable --now __NOMBRE__-celery-worker
+#   journalctl -u __NOMBRE__-celery-worker -f        # sus logs
 #
-# Marcadores (busque y sustituya):
-#   __USUARIO__       usuario con el que corre el servicio (p. ej. www-data)
-#   __GRUPO__         su grupo (puede ser el mismo)
-#   __PROYECTO__      carpeta del proyecto: la que tiene manage.py
-#   __MODULO__        carpeta con settings.py (el módulo de Django)
+# Lo único que hay que sustituir a mano son los datos del servidor:
+#   __USUARIO__    usuario con el que corre el servicio (p. ej. www-data)
+#   __GRUPO__      su grupo (puede ser el mismo)
+#   __PROYECTO__   carpeta del proyecto: la que tiene manage.py
 #   __VENV__          entorno virtual con celery y factec
 #   __CONCURRENCIA__  procesos del worker (4 va bien para facturar)
 #

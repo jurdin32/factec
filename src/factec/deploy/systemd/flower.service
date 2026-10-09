@@ -2,10 +2,11 @@
 #
 # Cópielo al servidor, sustituya los marcadores y actívelo:
 #
-#   sudo cp flower.service /etc/systemd/system/facturero-flower.service
-#   sudo systemctl daemon-reload && sudo systemctl enable --now facturero-flower
+#   sudo cp flower.service /etc/systemd/system/__NOMBRE__-flower.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now __NOMBRE__-flower
 #
-# Marcadores: __USUARIO__ __GRUPO__ __PROYECTO__ __MODULO__ __VENV__ __NOMBRE__
+# Lo único que hay que sustituir a mano son los datos del servidor:
+#   __USUARIO__ __GRUPO__ __PROYECTO__ __VENV__        (lo demás ya viene puesto)
 #   __DIRECCION__  dirección donde escucha (127.0.0.1 = solo local, lo más seguro)
 #   __PUERTO__     puerto del panel (5555 por omisión)
 #   __AUTH__      (solo Flower) usuario y clave si lo expone: --basic_auth=usuario:clave
