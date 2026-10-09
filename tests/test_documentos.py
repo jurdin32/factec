@@ -2131,3 +2131,174 @@ def test_el_admin_avisa_cuando_la_firma_impide_emitir(
     contenido = admin_cliente.get("/admin/sri_fe/comprobanteemitido/").content.decode()
 
     assert "El RUC del certificado" in contenido
+
+
+# ------------------------------- producto o servicio y sus detalles adicionales
+
+
+def test_el_producto_se_clasifica_como_producto_o_servicio(documentos):
+    """Se elige al crearlo, y la unidad de medida se propone según el tipo."""
+    from factec.django.documentos import Producto, TipoProducto
+
+    servicio = Producto.objects.create(
+        tipo=TipoProducto.SERVICIO, codigo_principal="SER1",
+        descripcion="Asesoría mensual", precio_unitario=Decimal("200"),
+    )
+    bien = Producto.objects.create(
+        tipo=TipoProducto.PRODUCTO, codigo_principal="BIE1",
+        descripcion="Caja de tornillos", precio_unitario=Decimal("10"),
+    )
+    con_unidad = Producto.objects.create(
+        tipo=TipoProducto.SERVICIO, codigo_principal="SER2", descripcion="Horas",
+        unidad_medida="hora", precio_unitario=Decimal("30"),
+    )
+
+    assert servicio.es_servicio is True
+    assert servicio.es_producto is False
+    assert servicio.unidad_medida == "SERVICIO"          # propuesta
+    assert bien.es_producto is True
+    assert bien.unidad_medida == "UNIDAD"                # propuesta
+    assert con_unidad.unidad_medida == "hora"            # la escrita manda
+
+
+def test_los_detalles_adicionales_del_producto_van_a_la_linea(
+    documentos, configuracion, cliente, cliente_falso, esquemas
+):
+    """Se configuran una vez en el producto y viajan en cada línea que lo use."""
+    from factec.django.documentos import Producto, TipoProducto
+
+    producto = Producto.objects.create(
+        tipo=TipoProducto.PRODUCTO, codigo_principal="TOR1",
+        descripcion="Tornillo 3/8", precio_unitario=Decimal("1.50"),
+        codigo_porcentaje_iva="4",
+        datos_adicionales="MARCA=ACME; GARANTIA=12 MESES",
+    )
+
+    factura = documentos.Factura.objects.create(receptor=cliente, fecha_emision=HOY)
+    linea = factura.detalles.create(producto=producto, cantidad=2)
+
+    assert linea.datos_adicionales == "MARCA=ACME; GARANTIA=12 MESES"
+    assert linea.campos_adicionales() == {"MARCA": "ACME", "GARANTIA": "12 MESES"}
+    assert linea.unidad_medida == "UNIDAD"                # también la unidad
+
+    registro = factura.emitir(encolar=False)
+
+    assert '<detAdicional nombre="MARCA" valor="ACME"' in registro.xml_sin_firma
+    assert '<detAdicional nombre="GARANTIA" valor="12 MESES"' in registro.xml_sin_firma
+    _valida(esquemas, "factura_V1.1.0.xsd", registro.xml_sin_firma)
+
+
+def test_la_linea_puede_cambiar_los_detalles_del_producto(
+    documentos, configuracion, cliente, cliente_falso
+):
+    """Lo escrito en la línea tiene prioridad: sirve para el lote de esa venta."""
+    from factec.django.documentos import Producto
+
+    producto = Producto.objects.create(
+        codigo_principal="TOR2", descripcion="Tornillo 1/2",
+        precio_unitario=Decimal("2"), datos_adicionales="MARCA=ACME",
+    )
+
+    factura = documentos.Factura.objects.create(receptor=cliente, fecha_emision=HOY)
+    linea = factura.detalles.create(
+        producto=producto, cantidad=1, datos_adicionales="MARCA=OTRA; LOTE=7",
+    )
+
+    registro = factura.emitir(encolar=False)
+
+    assert linea.datos_adicionales == "MARCA=OTRA; LOTE=7"
+    assert '<detAdicional nombre="MARCA" valor="OTRA"' in registro.xml_sin_firma
+    assert "ACME" not in registro.xml_sin_firma
+
+
+def test_los_detalles_adicionales_del_producto_se_validan(documentos):
+    from django.core.exceptions import ValidationError
+
+    from factec.django.documentos import Producto
+
+    producto = Producto(
+        codigo_principal="X1", descripcion="X", precio_unitario=Decimal("1"),
+        datos_adicionales="A=1; B=2; C=3; D=4",
+    )
+    with pytest.raises(ValidationError) as error:
+        producto.full_clean()
+    assert "datos_adicionales" in error.value.message_dict
+
+    producto.datos_adicionales = "A=1; B=2; C=3"
+    producto.full_clean()
+
+
+def test_el_admin_ofrece_el_tipo_y_los_detalles_del_producto(admin_cliente, producto):
+    """En el formulario se elige si es producto o servicio y sus campos adicionales."""
+    from django.contrib import admin as admin_django
+
+    from factec.django import documentos
+
+    respuesta = admin_cliente.get(f"/admin/sri_fe/producto/{producto.pk}/change/")
+    contenido = respuesta.content.decode()
+
+    assert respuesta.status_code == 200
+    assert "¿qué es?" in contenido
+    assert "servicio" in contenido                      # la opción de servicio
+    assert 'name="datos_adicionales"' in contenido      # sus detalles adicionales
+    assert "Detalles adicionales" in contenido          # con su explicación
+
+    admin_producto = admin_django.site._registry[documentos.Producto]
+    assert "tipo" in admin_producto.get_list_display(None)
+    assert "tipo" in admin_producto.get_list_filter(None)
+    assert "datos_adicionales" in admin_producto.get_search_fields(None)
+    assert "Un producto (bien) o un servicio" in str(admin_producto.fieldsets)
+
+    listado = admin_cliente.get("/admin/sri_fe/producto/").content.decode()
+    assert "Producto (bien)" in listado                 # la columna «qué es»
+
+
+def test_el_endpoint_del_producto_devuelve_los_detalles_adicionales(admin_cliente, producto):
+    """Es lo que rellena la línea de la factura al elegir el producto."""
+    from factec.django.documentos import Producto
+
+    producto.datos_adicionales = "MARCA=ACME"
+    producto.save()
+
+    respuesta = admin_cliente.get(f"/admin/sri_fe/producto/{producto.pk}/datos/")
+    datos = respuesta.json()
+
+    assert respuesta.status_code == 200
+    assert datos["datos_adicionales"] == "MARCA=ACME"
+    assert datos["unidad_medida"] == producto.unidad_medida
+    assert set(datos) == {
+        "descripcion", "codigo_principal", "codigo_auxiliar", "unidad_medida",
+        "precio_unitario", "codigo_porcentaje_iva", "datos_adicionales",
+    }
+
+
+def test_la_migracion_clasifica_los_productos_que_ya_existian(documentos):
+    """Lo guardado antes de «tipo» se clasifica por su unidad de medida."""
+    import importlib
+
+    from django.apps import apps as django_apps
+
+    from factec.django.documentos import Producto, TipoProducto
+
+    migracion = importlib.import_module(
+        "factec.django.migrations.0010_tipo_y_detalles_adicionales_del_producto"
+    )
+    por_horas = Producto.objects.create(
+        codigo_principal="H1", descripcion="Asesoría", unidad_medida="hora",
+        precio_unitario=Decimal("20"),
+    )
+    sin_unidad = Producto.objects.create(
+        codigo_principal="V1", descripcion="Genérico", precio_unitario=Decimal("1"),
+    )
+    # Se simula el estado anterior: sin tipo y sin unidad de medida.
+    Producto.objects.filter(pk=por_horas.pk).update(tipo=TipoProducto.PRODUCTO, unidad_medida="hora")
+    Producto.objects.filter(pk=sin_unidad.pk).update(unidad_medida="")
+
+    migracion.clasificar_lo_que_ya_existe(django_apps, None)
+
+    por_horas.refresh_from_db()
+    sin_unidad.refresh_from_db()
+    assert por_horas.tipo == TipoProducto.SERVICIO.value
+    assert por_horas.es_servicio is True
+    assert sin_unidad.unidad_medida == "UNIDAD"
+    assert sin_unidad.tipo == TipoProducto.PRODUCTO.value

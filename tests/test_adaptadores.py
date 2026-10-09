@@ -469,3 +469,29 @@ def test_registrar_por_nombre_del_modelo(registro_limpio):
 
     registro_limpio.registrar("mi_app.MiVenta", AdaptadorPropio)
     assert adaptadores.obtener("mi_app.MiVenta") is AdaptadorPropio
+
+
+class TestDetallesAdicionalesDelProducto:
+    """El ``detAdicional`` de la línea: los suyos y, si no tiene, los del producto."""
+
+    def test_los_toma_del_producto(self):
+        producto = {"codigo_principal": "TOR1", "descripcion": "Tornillo",
+                    "precio_unitario": Decimal("1.5"), "datos_adicionales": "MARCA=ACME"}
+        linea = {"producto": producto, "cantidad": Decimal("2")}
+
+        detalle = _adapt(adaptadores.AdaptadorFactura).detalle_desde_linea(linea)
+
+        assert detalle.detalles_adicionales == {"MARCA": "ACME"}
+
+    def test_los_de_la_linea_tienen_prioridad(self):
+        producto = {"datos_adicionales": "MARCA=ACME"}
+        linea = {"producto": producto, "descripcion": "X", "datos_adicionales": "MARCA=OTRA"}
+
+        detalle = _adapt(adaptadores.AdaptadorFactura).detalle_desde_linea(linea)
+
+        assert detalle.detalles_adicionales == {"MARCA": "OTRA"}
+
+    def test_sin_producto_ni_datos(self):
+        detalle = _adapt(adaptadores.AdaptadorFactura).detalle_desde_linea({"descripcion": "X"})
+
+        assert detalle.detalles_adicionales == {}

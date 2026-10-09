@@ -118,10 +118,12 @@ Admin: <http://127.0.0.1:8000/admin/> → **Facturación electrónica (SRI)**
 1. **Configuraciones del emisor** → escriba el **RUC** y guarde: la razón social,
    el régimen y las obligaciones se traen solos del catastro del SRI. Adjunte el
    **archivo de firma (.p12)** y su **contraseña** (se guarda cifrada).
-2. **Catálogos** → cree sus **Productos** (precio, IVA, código) y sus **Clientes**
-   (o use `CONSUMIDOR FINAL` para probar).
-3. **Comprobantes** → cree una **factura**, añada líneas *eligiendo el producto*
-   (la descripción, el precio y el IVA se completan solos) y pulse
+2. **Catálogos** → cree sus **Productos o servicios** (tipo, código, precio, IVA y,
+   si quiere, sus **detalles adicionales**) y sus **Clientes** (o use
+   `CONSUMIDOR FINAL` para probar).
+3. **Comprobantes** → cree una **factura**, añada líneas *eligiendo el producto o
+   servicio* (la descripción, el precio, el IVA, la unidad y sus detalles
+   adicionales se completan solos) y pulse
    **«Emitir: firmar, enviar al SRI y esperar autorización»**.
 
 Cada comprobante deja sus **XML y las respuestas del SRI** en una carpeta por año,
@@ -158,6 +160,29 @@ from factec.sri.fechas import DIAS_TOLERANCIA, hoy_en_ecuador, validar_fecha_emi
 
 hoy_en_ecuador()                 # la fecha con la que compara el SRI
 validar_fecha_emision(fecha)     # lanza ErrorValidacion si el SRI la rechazaría
+```
+
+### Productos y servicios con sus detalles adicionales
+
+En **Catálogos → Productos o servicios** se elige si lo que se vende es un
+**producto (bien)** o un **servicio**: sirve para filtrar y buscar, y propone la
+unidad de medida si se deja vacía (`UNIDAD` o `SERVICIO`).
+
+Los **detalles adicionales** del producto (hasta 3, en formato `NOMBRE=VALOR`
+separados por `;`, como `MARCA=ACME; GARANTIA=12 MESES`) se copian solos en cada
+línea del comprobante que use ese producto: se escriben **una sola vez** hasta el
+SRI, en `detallesAdicionales` de la línea. Si una venta concreta necesita otros
+(por ejemplo, el lote), se cambian en la propia línea.
+
+```python
+from factec.django.documentos import Producto, TipoProducto
+
+servicio = Producto.objects.create(
+    tipo=TipoProducto.SERVICIO, codigo_principal="ASES", descripcion="Asesoría mensual",
+    precio_unitario=200, datos_adicionales="MODALIDAD=REMOTA",
+)
+linea = factura.detalles.create(producto=servicio, cantidad=1)
+linea.datos_adicionales          # 'MODALIDAD=REMOTA'  (heredado)
 ```
 
 ### La fecha de emisión es la del día en que se firma
@@ -424,7 +449,7 @@ informe.certificado.nombre, informe.certificado.vencido()
 | [docs/django.md](docs/django.md) | La app de Django: modelos, admin, adaptadores, Celery y ajustes |
 | [docs/prueba-real.md](docs/prueba-real.md) | Emitir de verdad contra el ambiente de pruebas del SRI |
 | [examples/](examples/) | Scripts listos para ejecutar |
-| [tests/](tests/) | 503 pruebas, incluida la validación contra los XSD oficiales |
+| [tests/](tests/) | 515 pruebas, incluida la validación contra los XSD oficiales |
 
 ---
 

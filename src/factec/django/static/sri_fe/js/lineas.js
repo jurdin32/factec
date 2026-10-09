@@ -1,4 +1,5 @@
-/* Rellena la línea del comprobante con los datos del producto elegido.
+/* Rellena la línea del comprobante con los datos del producto elegido:
+ * descripción, códigos, unidad de medida, precio, IVA y sus detalles adicionales.
  *
  * Es una comodidad: el formulario hace lo mismo en el servidor, así que si el
  * navegador no ejecuta este archivo, la línea se completa igual al guardar.

@@ -151,6 +151,7 @@ NOMBRES_DETALLES_ADICIONALES = (
     "datos_adicionales",
     "detalle_adicional",
 )
+NOMBRES_PRODUCTO = ("producto", "articulo", "item_producto", "servicio", "bien")
 NOMBRES_RAZON_SOCIAL = ("razon_social", "nombre", "nombre_completo", "razonSocial")
 NOMBRES_IDENTIFICACION = ("identificacion", "ruc", "cedula", "numero_identificacion",
                           "documento", "cedula_ruc")
@@ -441,11 +442,23 @@ class AdaptadorComprobante:
             codigo_principal=_obtener(linea, NOMBRES_CODIGO),
             codigo_auxiliar=_obtener(linea, NOMBRES_CODIGO_AUXILIAR),
             unidad_medida=_obtener(linea, ("unidad_medida", "unidad", "medida")),
-            detalles_adicionales=_datos_adicionales(
-                _obtener(linea, NOMBRES_DETALLES_ADICIONALES, None)
-            ),
+            detalles_adicionales=self.detalles_adicionales_de_linea(linea),
             impuestos=[impuesto],
         )
+
+    def detalles_adicionales_de_linea(self, linea: Any) -> Dict[str, str]:
+        """``detAdicional`` de una línea: los suyos y, si no tiene, los del producto.
+
+        Así el detalle adicional se configura una sola vez, en el producto o
+        servicio, y viaja en todas las líneas que lo usen.
+        """
+        propios = _datos_adicionales(_obtener(linea, NOMBRES_DETALLES_ADICIONALES, None))
+        if propios:
+            return propios
+        producto = _obtener(linea, NOMBRES_PRODUCTO)
+        if producto is None:
+            return {}
+        return _datos_adicionales(_obtener(producto, NOMBRES_DETALLES_ADICIONALES, None))
 
     def impuesto_desde(self, codigo_iva: Any, linea: Any = None) -> Impuesto:
         """Construye el impuesto de una línea.

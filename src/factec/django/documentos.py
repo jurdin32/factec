@@ -60,6 +60,8 @@ __all__ = [
     "leer_campos_adicionales",
     "Cliente",
     "Producto",
+    "TipoProducto",
+    "UNIDAD_POR_TIPO",
     "DocumentoElectronico",
     "LineaDocumento",
     "Factura",
@@ -137,6 +139,24 @@ OPCIONES_TIPO_COMPROBANTE = _opciones(DESCRIPCION_TIPO_COMPROBANTE)
 
 #: Valores por omisión de los catálogos más usados.
 IVA_POR_OMISION = str(TarifaIva.IVA_15.value)
+
+
+class TipoProducto(models.TextChoices):
+    """Si lo que se vende es un bien o un servicio.
+
+    Es una clasificación de la tienda (el SRI no la distingue en la factura): sirve
+    para filtrar y buscar en el admin y para proponer la unidad de medida.
+    """
+
+    PRODUCTO = "producto", "Producto (bien)"
+    SERVICIO = "servicio", "Servicio"
+
+
+#: Unidad de medida que se propone según el tipo (el campo se puede cambiar).
+UNIDAD_POR_TIPO = {
+    TipoProducto.PRODUCTO.value: "UNIDAD",
+    TipoProducto.SERVICIO.value: "SERVICIO",
+}
 IDENTIFICACION_POR_OMISION = str(TipoIdentificacion.RUC.value)
 PAGO_POR_OMISION = str(FormaPago.SIN_SISTEMA_FINANCIERO.value)
 
@@ -243,6 +263,14 @@ class Producto(models.Model):
     reutilizarlos en cada línea.
     """
 
+    tipo = models.CharField(
+        "¿qué es?", max_length=10, choices=TipoProducto.choices,
+        default=TipoProducto.PRODUCTO,
+        help_text=(
+            "Un bien o un servicio. Sirve para filtrar y buscar en el admin, y para "
+            "proponer la unidad de medida si la deja vacía."
+        ),
+    )
     codigo_principal = models.CharField(
         "código principal", max_length=25, unique=True,
         help_text="Su código interno del producto o servicio (máximo 25 caracteres).",
@@ -254,7 +282,10 @@ class Producto(models.Model):
     descripcion = models.CharField("descripción", max_length=300)
     unidad_medida = models.CharField(
         "unidad de medida", max_length=50, blank=True,
-        help_text="Texto libre: unidad, caja, kg, litro, hora…",
+        help_text=(
+            "Texto libre: unidad, caja, kg, litro, hora… Si la deja vacía se usa "
+            "UNIDAD para un producto y SERVICIO para un servicio."
+        ),
     )
     precio_unitario = models.DecimalField(
         "precio unitario", max_digits=18, decimal_places=6, default=0,
@@ -263,6 +294,14 @@ class Producto(models.Model):
     codigo_porcentaje_iva = models.CharField(
         "IVA que aplica", max_length=2, choices=OPCIONES_TARIFA_IVA,
         default=IVA_POR_OMISION,
+    )
+    datos_adicionales = models.CharField(
+        "detalles adicionales", max_length=1000, blank=True,
+        help_text=(
+            "Opcional, hasta 3 campos. Formato NOMBRE=VALOR separados por «;»: "
+            "MARCA=ACME; GARANTIA=12 MESES. Se copian en cada línea del comprobante "
+            "que use este producto o servicio (y se pueden cambiar en la línea)."
+        ),
     )
     activo = models.BooleanField(
         "activo", default=True, help_text="No afecta al XML: sirve para no ofrecerlo más."
@@ -277,6 +316,36 @@ class Producto(models.Model):
 
     def __str__(self) -> str:
         return f"{self.codigo_principal} — {self.descripcion}"
+
+    # --------------------------------------------------------- clasificación
+
+    @property
+    def es_servicio(self) -> bool:
+        """¿Es un servicio (y no un bien)?"""
+        return self.tipo == TipoProducto.SERVICIO.value
+
+    @property
+    def es_producto(self) -> bool:
+        """¿Es un bien?"""
+        return not self.es_servicio
+
+    def campos_adicionales(self) -> Dict[str, str]:
+        """Detalles adicionales del producto ya interpretados (``{nombre: valor}``)."""
+        return leer_campos_adicionales(self.datos_adicionales)
+
+    def clean(self) -> None:
+        super().clean()
+        try:
+            campos = self.campos_adicionales()
+            validar_cantidad(campos, MAXIMO_DATOS_ADICIONALES, "«detallesAdicionales»")
+        except ValidationError as error:
+            raise ValidationError({"datos_adicionales": error.messages}) from error
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        # La unidad de medida se propone según el tipo, y se puede cambiar.
+        if not (self.unidad_medida or "").strip():
+            self.unidad_medida = UNIDAD_POR_TIPO.get(self.tipo, "UNIDAD")
+        super().save(*args, **kwargs)
 
 
 # ------------------------------------------------------------- bases comunes
@@ -456,7 +525,8 @@ class LineaDocumento(models.Model):
         "datos adicionales", max_length=1000, blank=True,
         help_text=(
             "Opcional, hasta 3 campos. Formato NOMBRE=VALOR separados por «;»: "
-            "MARCA=ACME; LOTE=2026-01. Viaja al SRI en «detallesAdicionales»."
+            "MARCA=ACME; LOTE=2026-01. Viaja al SRI en «detallesAdicionales». Si se "
+            "elige un producto, se copian los suyos."
         ),
     )
 
@@ -502,6 +572,8 @@ class LineaDocumento(models.Model):
             self.precio_unitario = producto.precio_unitario
         if not self.codigo_porcentaje_iva:
             self.codigo_porcentaje_iva = producto.codigo_porcentaje_iva
+        if not self.datos_adicionales:
+            self.datos_adicionales = producto.datos_adicionales
 
     def a_detalle(self) -> Detalle:
         """Convierte la línea en el objeto que entiende el generador de XML."""

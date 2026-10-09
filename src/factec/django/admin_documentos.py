@@ -83,21 +83,60 @@ class ClienteAdmin(AdminConAjustes):
 
 @admin.register(documentos.Producto)
 class ProductoAdmin(AdminConAjustes):
+    """Catálogo de lo que se vende: bienes y servicios.
+
+    El **tipo** (producto o servicio) es lo primero que se elige, y los **detalles
+    adicionales** que se escriban aquí se copian solos en cada línea del comprobante
+    que use el producto (en el formulario de la factura, al elegirlo).
+    """
+
     list_display = (
-        "codigo_principal", "descripcion", "unidad_medida",
+        "codigo_principal", "descripcion", "tipo", "unidad_medida",
         "precio_unitario", "codigo_porcentaje_iva", "activo",
     )
     list_filter = (
+        "tipo",
         "activo",
         "codigo_porcentaje_iva",
         "unidad_medida",
         filtro_por_fecha("creado", "Alta"),
     )
-    search_fields = ("codigo_principal", "codigo_auxiliar", "descripcion", "unidad_medida")
+    search_fields = (
+        "codigo_principal", "codigo_auxiliar", "descripcion", "unidad_medida",
+        "datos_adicionales",
+    )
     date_hierarchy = "creado"
     list_editable = ("activo",)
     list_per_page = 50
     ordering = ("descripcion",)
+    readonly_fields = ("creado", "actualizado")
+    fieldsets = (
+        ("¿Qué vende?", {
+            "fields": ("tipo", "activo"),
+            "description": "Un producto (bien) o un servicio. Sirve para filtrar y "
+                           "para proponer la unidad de medida si la deja vacía.",
+        }),
+        ("Identificación", {
+            "fields": ("codigo_principal", "codigo_auxiliar", "descripcion",
+                       "unidad_medida"),
+            "description": "La descripción y los códigos son los que van al SRI. La "
+                           "unidad de medida es texto libre: unidad, caja, kg, hora…",
+        }),
+        ("Precio e impuestos", {
+            "fields": ("precio_unitario", "codigo_porcentaje_iva"),
+        }),
+        ("Detalles adicionales", {
+            "fields": ("datos_adicionales",),
+            "description": "Hasta 3 campos por línea, en formato NOMBRE=VALOR "
+                           "separados por «;»: MARCA=ACME; GARANTIA=12 MESES. Se "
+                           "copian en cada línea del comprobante que use este "
+                           "producto o servicio, y en la línea se pueden cambiar.",
+        }),
+        ("Auditoría", {
+            "classes": ("collapse",),
+            "fields": ("creado", "actualizado"),
+        }),
+    )
 
     @admin.display(description="IVA", ordering="codigo_porcentaje_iva")
     def iva_mostrado(self, obj: Any) -> str:
@@ -113,7 +152,11 @@ class ProductoAdmin(AdminConAjustes):
         ] + super().get_urls()
 
     def datos(self, request: Any, pk: int) -> JsonResponse:
-        """Datos del producto en JSON, para rellenar la línea del comprobante."""
+        """Datos del producto en JSON, para rellenar la línea del comprobante.
+
+        Incluye los detalles adicionales del producto: la línea los recibe solos y
+        el usuario no tiene que volver a escribirlos.
+        """
         producto = get_object_or_404(documentos.Producto, pk=pk)
         return JsonResponse(
             {
@@ -123,6 +166,7 @@ class ProductoAdmin(AdminConAjustes):
                 "unidad_medida": producto.unidad_medida,
                 "precio_unitario": f"{producto.precio_unitario:.6f}".rstrip("0").rstrip("."),
                 "codigo_porcentaje_iva": producto.codigo_porcentaje_iva,
+                "datos_adicionales": producto.datos_adicionales,
             }
         )
 

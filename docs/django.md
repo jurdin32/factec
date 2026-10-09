@@ -139,11 +139,13 @@ cliente = documentos.Cliente.objects.create(
     direccion="AV. AMAZONAS 123, QUITO",
 )
 producto = documentos.Producto.objects.create(
+    tipo=documentos.TipoProducto.SERVICIO,    # o PRODUCTO (un bien)
     codigo_principal="SRV001",                # máximo 25 caracteres
     descripcion="Servicio de desarrollo",     # máximo 300
-    unidad_medida="hora",
+    unidad_medida="hora",                     # si se omite: UNIDAD o SERVICIO, según el tipo
     precio_unitario=100,
     codigo_porcentaje_iva="4",                # 4 = IVA 15 %
+    datos_adicionales="MODALIDAD=REMOTA",     # van a cada línea que use el producto
 )
 ```
 
@@ -162,6 +164,13 @@ del SRI: `codigo_principal` (25), `codigo_auxiliar` (25), `descripcion` (300),
 `unidad_medida` (50), `cantidad` y `precio_unitario` con 6 decimales, `descuento`
 con 2, `codigo_porcentaje_iva` y `datos_adicionales`.
 
+`Producto` se clasifica con **`tipo`**: `TipoProducto.PRODUCTO` (un bien) o
+`TipoProducto.SERVICIO`. Es una clasificación de la tienda —el SRI no la distingue
+en la factura— que sirve para filtrar y buscar en el admin, y para proponer la
+unidad de medida (`UNIDAD_POR_TIPO`). Al elegir un producto en la línea, esta
+hereda todo lo que el producto tenga: descripción, códigos, unidad, precio, IVA y
+sus **detalles adicionales** (`Producto.datos_adicionales`).
+
 #### Campos adicionales a la medida de la tienda
 
 El SRI admite dos secciones libres y no hay que tocar el paquete para usarlas: se
@@ -169,6 +178,7 @@ escriben en el admin como pares `NOMBRE=VALOR` separados por `;` (o por renglone
 
 | Dónde | Campo | Va al XML | Máximo | Ejemplo |
 |---|---|---|---|---|
+| **Producto o servicio** (`Producto`) | `datos_adicionales` | los hereda cada línea que lo use | 3 | `MARCA=ACME; GARANTIA=12 MESES` |
 | Línea (comprobante de venta) | `datos_adicionales` | `<detallesAdicionales>/<detAdicional>` | 3 | `MARCA=ACME; LOTE=2026-01` |
 | Bien transportado (`GuiaDetalle`) | `datos_adicionales` | igual | 3 | `BULTO=12` |
 | Comprobante (los seis) | `informacion_adicional` | `<infoAdicional>/<campoAdicional>` | 15 | `ORDEN=OC-0001; VENDEDOR=MARÍA` |
@@ -178,8 +188,21 @@ Los campos de la tienda se añaden primero y los del comprobante tienen priorida
 así que una factura concreta puede sobrescribir el vendedor o la sucursal. Las
 `observaciones` viajan además como el campo adicional «Observaciones».
 
+Los **detalles adicionales de la línea** se configuran una sola vez, en el producto o
+servicio, y la línea los hereda al elegirlo (en el admin se rellenan solos, como el
+resto de los datos del producto). Lo que se escriba en la línea tiene prioridad, y
+también se heredan si usa sus propios modelos: el adaptador mira los de la línea y,
+si están vacíos, los del producto al que apunta.
+
 ```python
 from factec.django import documentos
+from factec.django.documentos import Producto, TipoProducto
+
+producto = Producto.objects.create(                    # producto o servicio
+    tipo=TipoProducto.SERVICIO, codigo_principal="ASES",
+    descripcion="Asesoría mensual", precio_unitario=200,
+    datos_adicionales="MODALIDAD=REMOTA",               # viaja en cada línea
+)
 
 configuracion.campos_adicionales = "SUCURSAL=MATRIZ; VENDEDOR=JOHNNY"   # una sola vez
 
@@ -627,7 +650,7 @@ columnas y campos de solo lectura que indique.
 | `GuiaDestinatario` | Motivo de traslado, tipo de identificación, documento que sustenta, fecha del sustento | Destinatario, ruta, número y autorización del sustento, bienes |
 | `RetencionDocSustento` | Documento y código de sustento, pago local/exterior, convenio de doble tributación, rango de fechas e importes | Números de documento y autorización, sujeto retenido, retenciones e impuestos |
 | `Cliente` | Tipo de identificación, fecha de alta | Razón social, identificación, correo, teléfono, dirección |
-| `Producto` | Activo, IVA, unidad de medida, fecha de alta | Código principal y auxiliar, descripción, unidad |
+| `Producto` | **Producto o servicio**, activo, IVA, unidad de medida, fecha de alta | Código principal y auxiliar, descripción, unidad, detalles adicionales |
 | `ComprobanteEmitido` | Estado, tipo, ambiente, tipo de emisión, configuración, rangos de fechas e importes, **sin enviar de otro día** | Clave, autorización, receptor, secuencial, carpeta, mensajes y error |
 | `ConfiguracionEmisor` | Activo, ambiente, obligado a contabilidad, régimen, categoría, firma cargada, fecha de alta | RUC, razón social, direcciones, serie, certificado, resoluciones |
 | **Líneas** (`FacturaDetalle`, `LiquidacionCompraDetalle`, `NotaCreditoDetalle`, `GuiaDetalle`) | Fecha y estado del comprobante, IVA, importe, tipo de identificación de la contraparte | Descripción, códigos, datos adicionales, producto, cliente/proveedor, secuencial y clave del comprobante |
