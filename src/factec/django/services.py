@@ -316,7 +316,25 @@ def actualizar_fecha(
     # El XML y las respuestas quedan en la carpeta del comprobante, ahora con la
     # clave nueva dentro del nombre.
     _guardar_archivos(registro, **{archivos.NOMBRE_SIN_FIRMA: cambiado.xml})
+    _fijar_fecha_en_el_documento(registro)
     return registro
+
+
+def _fijar_fecha_en_el_documento(registro: models.ComprobanteEmitido) -> None:
+    """Deja la fecha nueva también en el documento vinculado.
+
+    El registro y el documento son dos filas de la misma factura: si solo se
+    cambiara la del registro, la lista del admin seguiría enseñando el día viejo.
+    """
+    try:
+        documento = registro.objeto
+        fijar = getattr(documento, "fijar_fecha_de_emision", None)
+        if callable(fijar):
+            fijar(registro.fecha_emision)
+    except Exception:  # pragma: no cover - modelos propios sin el campo
+        logger.warning(
+            "No se pudo actualizar la fecha del documento de %s", registro.pk, exc_info=True
+        )
 
 
 # --------------------------------------------------------------- registro

@@ -549,7 +549,17 @@ comprobante.fecha_emision, comprobante.clave
 
 Como la fecha la pone la firma, un documento con una fecha mal puesta (futura o
 de hace meses) no inutiliza el comprobante: se emite con la de hoy, que es la que el
-SRI acepta.
+SRI acepta. Y esa fecha se copia en el documento (`Factura.fecha_emision`,
+`Retencion.fecha_emision`…): el registro y la factura son dos filas de la misma
+emisión, así que después de emitir **las dos muestran el mismo día**, el del XML
+autorizado. Un modelo propio de su proyecto recibe el aviso si define
+`fijar_fecha_de_emision(fecha)`.
+
+El «hoy» del paquete es siempre el de Ecuador (UTC-5 fijo), no el del servidor: los
+filtros del admin (**«Hoy»**, **«Sin enviar, de otro día»**), el valor por omisión de
+la fecha de emisión, la carpeta donde se archiva el XML (`2026/10/09/…`) y `sri-fe
+clave` usan ese mismo reloj. Con `TIME_ZONE = "UTC"` el día del servidor va por
+delante desde las 19:00 de Ecuador y esos días no coincidirían.
 
 Solo se puede refechar un comprobante **que no se haya enviado** (`intentos == 0`):
 una vez que el SRI lo recibió, la clave está registrada allí. En el admin está la

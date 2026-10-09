@@ -33,7 +33,6 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from django.contrib import admin
-from django.utils import timezone
 
 __all__ = [
     "AdminConAjustes",
@@ -82,7 +81,12 @@ class FiltroPorFecha(admin.SimpleListFilter):
         if not valor:
             return queryset
 
-        hoy = timezone.localdate()
+        from ..sri import fechas
+
+        # El mismo «hoy» con el que se emite y se valida: el de Ecuador. Con el
+        # reloj del servidor (TIME_ZONE=UTC) el día va por delante desde las
+        # 19:00 de Ecuador y «Hoy» saldría vacío.
+        hoy = fechas.hoy_en_ecuador()
         campo = self.campo
         if valor == "hoy":
             return queryset.filter(**{campo: hoy})

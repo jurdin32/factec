@@ -248,11 +248,31 @@ def emitir(
     comprobante = manejador.comprobante(obj)
     fijar_fecha_de_emision(comprobante, fecha=fecha_emision)
     _revisar(comprobante, revisar=revisar)
+    # Solo cuando ya se sabe que se puede emitir: si la revisión falla, el
+    # documento se queda como estaba.
+    _fijar_fecha_en_el_documento(obj, comprobante.fecha_emision)
     registro = services.registrar(comprobante, guardar_xml=guardar_xml)
     if vincular:
         registro.vincular(obj)
     _asociar_en_modelo(obj, registro)
     return _enviar(registro, encolar=encolar, intentos=intentos, espera=espera)
+
+
+def _fijar_fecha_en_el_documento(obj: Any, fecha: Any) -> None:
+    """Copia en el documento la fecha con la que se emite el comprobante.
+
+    El comprobante se firma con el día de la firma y el documento puede traer la
+    fecha con la que se preparó: sin copiarla, la lista del admin mostraría un día
+    y el XML autorizado otro. Los modelos del paquete exponen
+    ``fijar_fecha_de_emision()``; con modelos propios basta con definir ese método.
+    """
+    fijar = getattr(obj, "fijar_fecha_de_emision", None)
+    if not callable(fijar):
+        return
+    try:
+        fijar(fecha)
+    except Exception:  # pragma: no cover - modelos propios sin el campo
+        logger.warning("No se pudo actualizar la fecha de emisión del documento %s", obj)
 
 
 def _asociar_en_modelo(obj: Any, registro: models.ComprobanteEmitido) -> None:

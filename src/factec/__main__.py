@@ -132,7 +132,7 @@ def cmd_clave(args: argparse.Namespace) -> int:
         print(f"❌ Faltan argumentos: {', '.join(faltantes)}", file=sys.stderr)
         return 2
     clave = generar_clave_acceso(
-        fecha_emision=args.fecha or date.today(),
+        fecha_emision=args.fecha or fechas.hoy_en_ecuador(),
         tipo_comprobante=args.tipo,
         ruc=args.ruc,
         ambiente=args.ambiente,

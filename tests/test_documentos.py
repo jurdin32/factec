@@ -1692,10 +1692,16 @@ def test_se_puede_filtrar_y_buscar_de_verdad(admin_cliente, factura, cliente_fal
     ).content.decode()
 
 
-def test_los_filtros_propios_del_paquete_funcionan(admin_cliente, factura, cliente_falso):
+def test_los_filtros_propios_del_paquete_funcionan(admin_cliente, factura, cliente_falso,
+                                                   fecha_de_referencia):
     """Rango de fechas, rango de importes y emitidos / sin emitir."""
     from factec.django import admin_filtros
+    from factec.sri import fechas
 
+    # «Hoy» es el día del SRI, así que la factura se emite con ese día: la prueba
+    # mide el filtro, no la fecha del reloj de la máquina.
+    factura.fecha_emision = fechas.hoy_en_ecuador()
+    factura.save(update_fields=["fecha_emision"])
     factura.emitir(encolar=False)
 
     def aparece(parametros: dict) -> bool:
@@ -1711,7 +1717,7 @@ def test_los_filtros_propios_del_paquete_funcionan(admin_cliente, factura, clien
     assert aparece({"importe_comprobante_importe_total": "100_500"})
     assert not aparece({"importe_comprobante_importe_total": "0_10"})
 
-    # Fechas: hoy (el fixture emite con la fecha de hoy) y un rango vacío
+    # Fechas: hoy, y dos rangos que no lo contienen
     assert aparece({"rango_fecha_emision": "hoy"})
     assert not aparece({"rango_fecha_emision": "sin_fecha"})
     assert not aparece({"rango_fecha_emision": "mes_pasado"})
@@ -2520,3 +2526,105 @@ def test_servicios_celery_puede_enlazarlos_desde_el_proyecto(entorno_django, tmp
     assert "el archivo no se copia" in texto
     # Nada de copiar a /etc.
     assert "cp " not in texto.split("Comandos que ejecutaría")[1]
+
+
+def test_el_filtro_de_fechas_usa_el_dia_del_sri_y_no_el_del_servidor(
+    admin_cliente, factura, cliente_falso, fecha_de_referencia, monkeypatch
+):
+    """El reloj del servidor va un día por delante desde las 19:00 de Ecuador.
+
+    El filtro «Hoy» debe mirar el mismo día con el que se emite y se valida (el
+    del SRI) y no ``timezone.localdate()``: si no, con ``TIME_ZONE=UTC`` la lista
+    sale vacía justo cuando más facturas se emiten.
+    """
+    from datetime import date
+
+    from factec.sri import fechas
+
+    elegido = date(2020, 1, 1)              # muy lejos del reloj de la máquina
+    monkeypatch.setattr(fechas, "hoy_en_ecuador", lambda momento=None: elegido)
+
+    factura.fecha_emision = elegido
+    factura.save(update_fields=["fecha_emision"])
+    factura.emitir(encolar=False)
+
+    respuesta = admin_cliente.get("/admin/sri_fe/factura/", {"rango_fecha_emision": "hoy"})
+    assert respuesta.status_code == 200
+    assert "DISTRIBUIDORA ANDINA" in respuesta.content.decode()
+
+
+def test_el_documento_queda_con_la_fecha_del_comprobante_emitido(
+    documentos, factura, cliente_falso, fecha_de_referencia
+):
+    """El borrador puede ser de ayer; el documento debe enseñar el día firmado."""
+    from factec.django import documentos as mod_documentos
+    from factec.sri import fechas
+
+    hoy = fechas.hoy_en_ecuador()
+    assert factura.fecha_emision == HOY != hoy
+
+    registro = factura.emitir(encolar=False)
+
+    assert registro.fecha_emision == hoy
+    guardada = mod_documentos.Factura.objects.get(pk=factura.pk)
+    assert guardada.fecha_emision == hoy
+    assert f"<fechaEmision>{hoy:%d/%m/%Y}</fechaEmision>" in registro.xml_sin_firma
+
+
+def test_al_refechar_un_comprobante_el_documento_cambia_con_el(documentos, factura,
+                                                              configuracion):
+    """Refechar el registro tiene que refechar también la factura."""
+    from datetime import timedelta
+
+    from factec.django import documentos as mod_documentos
+    from factec.django import facturacion, services
+    from factec.sri import fechas
+
+    hoy = fechas.hoy_en_ecuador()
+    vieja = hoy - timedelta(days=3)
+    factura.fecha_emision = vieja
+    factura.save(update_fields=["fecha_emision"])
+
+    registro = services.registrar(facturacion.comprobante_de(factura, fecha_emision=vieja),
+                                  objeto=factura)
+    services.actualizar_fecha(registro)
+
+    assert registro.fecha_emision == hoy
+    guardada = mod_documentos.Factura.objects.get(pk=factura.pk)
+    assert guardada.fecha_emision == hoy
+
+
+def test_la_fecha_por_omision_es_la_del_sri(entorno_django):
+    """El borrador nace con el día del SRI, no con el del servidor.
+
+    Con ``date.today()`` (el reloj del servidor) una factura creada a las 20:00 de
+    Ecuador en un servidor UTC nacería con la fecha de mañana.
+    """
+    from datetime import date
+
+    from factec.django import documentos as mod_documentos
+    from factec.sri import fechas
+
+    campo = mod_documentos.Factura._meta.get_field("fecha_emision")
+    assert campo.default is not date.today
+    assert campo.get_default() == fechas.hoy_en_ecuador()
+
+
+def test_la_carpeta_del_comprobante_sin_fecha_usa_el_dia_del_sri(
+    entorno_django, fecha_de_referencia, monkeypatch
+):
+    """Un registro sin fecha se archiva con el día del SRI, no con el del servidor."""
+    from datetime import date
+
+    from factec.django import archivos
+    from factec.sri import fechas
+
+    monkeypatch.setattr(fechas, "hoy_en_ecuador", lambda momento=None: date(2020, 3, 4))
+
+    class SinFecha:
+        estab = "001"
+        pto_emi = "001"
+        secuencial = "1"
+        clave_acceso = ""
+
+    assert "/2020/03/04/" in archivos.carpeta_de(SinFecha())

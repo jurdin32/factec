@@ -540,7 +540,7 @@ informe.certificado.nombre, informe.certificado.vencido()
 | [docs/flower.md](docs/flower.md) | El panel de Celery: pantallas, cómo seguir una factura y qué mirar cuando algo falla |
 | [docs/prueba-real.md](docs/prueba-real.md) | Emitir de verdad contra el ambiente de pruebas del SRI |
 | [examples/](examples/) | Scripts listos para ejecutar (incluye `celery.py` para copiar) |
-| [tests/](tests/) | 515 pruebas, incluida la validación contra los XSD oficiales |
+| [tests/](tests/) | 527 pruebas, incluida la validación contra los XSD oficiales |
 
 ---
 

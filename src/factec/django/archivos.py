@@ -77,9 +77,9 @@ def carpeta_de(registro: Any) -> str:
     """
     fecha = getattr(registro, "fecha_emision", None)
     if fecha is None:
-        from datetime import date
+        from ..sri import fechas
 
-        fecha = date.today()
+        fecha = fechas.hoy_en_ecuador()
 
     serie = "-".join(
         parte for parte in (

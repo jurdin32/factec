@@ -153,6 +153,11 @@ validar_fecha_emision(hoy_en_ecuador().replace(day=...))   # lanza ErrorValidaci
 | `validar_fecha_emision(fecha)` | Lanza `ErrorValidacion` si el SRI la rechazaría |
 | `DIAS_TOLERANCIA` / `MINUTOS_TOLERANCIA` | 90 días / 129600 minutos |
 
+Es el único «hoy» del paquete: no use `date.today()` ni `timezone.localdate()` para
+decidir el día de un comprobante. En un servidor con `TIME_ZONE = "UTC"` (lo habitual)
+el día del servidor va por delante desde las 19:00 de Ecuador, así que la fecha del
+XML, la del borrador y la de las listas del admin acabarían siendo distintas.
+
 Si prefiere emitir de todos modos (por ejemplo para reproducir un error), ponga
 `VALIDAR_FECHA_EMISION = False` en la clase o instancia del comprobante.
 
@@ -553,7 +558,11 @@ SRI_XSD_DIR=/ruta/a/los/xsd pytest
 
 Las pruebas se saltan solas si no encuentra los esquemas, y **no** se incluyen en
 el paquete por no redistribuir material de terceros. Obténgalos de la
-documentación de comprobantes electrónicos del SRI.
+documentación de comprobantes electrónicos del SRI: se necesitan seis archivos
+(`factura_V1.1.0.xsd`, `NotaCredito_V1.1.0.xsd`, `NotaDebito_V1.0.0.xsd`,
+`ComprobanteRetencion_V2.0.0.xsd`, `GuiaRemision_V1.1.0.xsd` y
+`LiquidacionCompra_V1.1.0.xsd`). Guárdelos en una carpeta que no se borre sola
+—no en `/tmp`, que el sistema limpia— y pase esa ruta en `SRI_XSD_DIR`.
 
 ---
 
@@ -607,5 +616,5 @@ factec/
 python examples/factura_basica.py          # genera XML (sin certificado ni red)
 python examples/prueba_real.py --config prueba_config.json --solo-diagnostico
 python examples/prueba_real.py --config prueba_config.json   # emisión real en pruebas
-SRI_XSD_DIR=/tmp/sri_xsd pytest            # 205 pruebas
+SRI_XSD_DIR=/tmp/sri_xsd pytest            # incluye las que validan contra los XSD
 ```

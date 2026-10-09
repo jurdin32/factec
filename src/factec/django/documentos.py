@@ -20,7 +20,6 @@ modelos sin configuración::
 
 from __future__ import annotations
 
-from datetime import date
 from decimal import Decimal
 from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
@@ -361,7 +360,14 @@ class DocumentoElectronico(models.Model):
     #: Código ``codDoc`` del SRI. Lo fija cada documento.
     TIPO_COMPROBANTE: ClassVar[str] = ""
 
-    fecha_emision = models.DateField("fecha de emisión", default=date.today)
+    fecha_emision = models.DateField(
+        "fecha de emisión",
+        default=fechas.hoy_en_ecuador,
+        help_text=(
+            "Al emitir se ajusta al día de la firma (el reloj del SRI, Ecuador), "
+            "salvo con FACTURACION_ELECTRONICA['FECHA_EMISION_AL_EMITIR'] = False."
+        ),
+    )
     secuencial = models.CharField(
         "secuencial", max_length=9, blank=True, validators=[SECUENCIAL_VALIDO],
         help_text="Se asigna solo al emitir, con el contador del SRI (sri_fe_secuencial).",
@@ -463,6 +469,21 @@ class DocumentoElectronico(models.Model):
         return self.comprobante.xml_autorizado if self.comprobante_id else ""
 
     # --------------------------------------------------------------- emisión
+
+    def fijar_fecha_de_emision(self, fecha: Any, guardar: bool = True) -> bool:
+        """Deja en el documento la fecha con la que se emitió el comprobante.
+
+        El comprobante se firma con el día de la firma (el reloj del SRI), pero el
+        documento puede traer la fecha con la que se preparó: sin copiarla, la
+        lista del admin mostraría un día y el XML autorizado otro. Devuelve
+        ``True`` si hubo que cambiarla.
+        """
+        if fecha is None or self.pk is None or self.fecha_emision == fecha:
+            return False
+        self.fecha_emision = fecha
+        if guardar:
+            self.save(update_fields=["fecha_emision"])
+        return True
 
     def emitir(self, **kwargs: Any) -> Any:
         """Arma el XML, lo firma y lo envía al SRI (ver ``facturacion.emitir``)."""
