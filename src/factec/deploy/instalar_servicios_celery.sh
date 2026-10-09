@@ -201,8 +201,10 @@ comprobar_particion() {
   [ "$ENLAZAR" -eq 1 ] || return 0
   [ "$(uname -s)" = "Linux" ] || return 0
   local aparato raiz
-  aparato="$(df -P "$DESTINO" 2>/dev/null | awk 'NR==2 {print $1}')"
-  raiz="$(df -P / 2>/dev/null | awk 'NR==2 {print $1}')"
+  # ``|| true``: si la carpeta todavía no existe, ``df`` falla y con ``set -e`` se
+  # llevaría por delante el script entero.
+  aparato="$(df -P "$DESTINO" 2>/dev/null | awk 'NR==2 {print $1}')" || true
+  raiz="$(df -P / 2>/dev/null | awk 'NR==2 {print $1}')" || true
   if [ -n "$aparato" ] && [ -n "$raiz" ] && [ "$aparato" != "$raiz" ]; then
     aviso "${DESTINO} está en otro sistema de archivos ($aparato), no en el del sistema ($raiz)."
     info  "systemd lee los enlaces al arrancar: si ese sistema todavía no está montado,"

@@ -737,9 +737,30 @@ def _secciones(html: str) -> list:
     return re.findall(r'<a href="[^"]*" class="section">([^<]+)</a>', html)
 
 
+def _pagina_del_admin(cliente, ruta: str) -> str:
+    """HTML de una página del admin, diciendo qué pasó si no es la esperada.
+
+    Sin esto, un fallo en otra máquina (otra versión del admin, una redirección al
+    login, una página sin permisos) sale como un «assert [] == [...]» que no dice
+    nada: así el mensaje lleva el estado, la redirección y el principio del HTML.
+    """
+    respuesta = cliente.get(ruta)
+    if respuesta.status_code != 200:
+        destino = respuesta.get("Location") or "sin Location"
+        raise AssertionError(f"{ruta} devolvió {respuesta.status_code} ({destino})")
+
+    html = respuesta.content.decode()
+    if 'class="section"' not in html:
+        raise AssertionError(
+            f"{ruta} no trae secciones del admin: {len(html)} caracteres. "
+            f"Empieza por {html[:300]!r}"
+        )
+    return html
+
+
 def test_el_indice_agrupa_por_temas(admin_cliente):
     """Configuración, catálogos, comprobantes y emisión van separados."""
-    html = admin_cliente.get("/admin/").content.decode()
+    html = _pagina_del_admin(admin_cliente, "/admin/")
     propias = [
         titulo for titulo in _secciones(html)
         if titulo in ("Configuración del SRI", "Catálogos", "Comprobantes", "Emisión")
@@ -750,7 +771,7 @@ def test_el_indice_agrupa_por_temas(admin_cliente):
 
 
 def test_cada_seccion_lleva_sus_modelos(admin_cliente):
-    html = admin_cliente.get("/admin/").content.decode()
+    html = _pagina_del_admin(admin_cliente, "/admin/")
 
     def modelos_de(titulo: str) -> str:
         trozo = html[html.find(f'class="section">{titulo}') :]
@@ -804,7 +825,7 @@ def test_sin_permisos_no_aparecen_las_secciones(admin_cliente):
 
 def test_la_portada_de_la_app_tambien_agrupa(admin_cliente):
     """La portada /admin/sri_fe/ usa las mismas secciones."""
-    html = admin_cliente.get("/admin/sri_fe/").content.decode()
+    html = _pagina_del_admin(admin_cliente, "/admin/sri_fe/")
 
     assert "Configuración del SRI" in _secciones(html)
     assert "Comprobantes" in _secciones(html)
@@ -2642,3 +2663,30 @@ def test_la_carpeta_del_comprobante_sin_fecha_usa_el_dia_del_sri(
         clave_acceso = ""
 
     assert "/2020/03/04/" in archivos.carpeta_de(SinFecha())
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="los servicios son de Linux")
+def test_servicios_celery_enlaza_aunque_la_carpeta_no_exista(entorno_django, tmp_path):
+    """Si la carpeta de destino no existe, el script no puede morir por ``set -e``.
+
+    Al enlazar, el script mira en qué sistema de archivos está la carpeta (para
+    avisar si systemd no podrá leerla al arrancar). Si la carpeta todavía no existe,
+    ``df`` falla: con ``set -e`` eso se llevaba por delante el script entero, y solo
+    se veía en Linux.
+    """
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    proyecto = _proyecto_falso(tmp_path)
+    destino = tmp_path / "todavia" / "no" / "existe"
+    salida = StringIO()
+
+    call_command(
+        "servicios_celery", "--enlazar", "--dry-run", "--destino", str(destino),
+        "--proyecto-dir", str(proyecto), "--venv", sys.prefix, "--modulo", "mi_proyecto",
+        stdout=salida,
+    )
+
+    assert f"Destino  : {destino}" in salida.getvalue()
+    assert "systemctl enable --now" in salida.getvalue()
