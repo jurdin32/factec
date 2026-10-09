@@ -265,6 +265,10 @@ ssh -L 5555:127.0.0.1:5555 usuario@servidor     # y abra http://127.0.0.1:5555
 Y para dejarlo expuesto, que sea con usuario y clave:
 `celery -A mi_proyecto flower --address=0.0.0.0 --basic_auth=juan:secreta`.
 
+En [docs/flower.md](docs/flower.md) está el día a día del panel: qué significa cada
+estado para una factura, cómo buscar una emisión concreta, el API para monitorizar
+y qué mirar cuando algo no aparece.
+
 ### Servicios de Linux (systemd)
 
 Un comando del paquete crea los servicios del worker, del beat y de Flower con
@@ -505,6 +509,7 @@ informe.certificado.nombre, informe.certificado.vencido()
 |---|---|
 | [docs/nucleo.md](docs/nucleo.md) | Uso sin Django: clave de acceso, XML, firma, envío, lectura y verificación, CLI y API |
 | [docs/django.md](docs/django.md) | La app de Django: modelos, admin, adaptadores, Celery y ajustes |
+| [docs/flower.md](docs/flower.md) | El panel de Celery: pantallas, cómo seguir una factura y qué mirar cuando algo falla |
 | [docs/prueba-real.md](docs/prueba-real.md) | Emitir de verdad contra el ambiente de pruebas del SRI |
 | [examples/](examples/) | Scripts listos para ejecutar |
 | [tests/](tests/) | 515 pruebas, incluida la validación contra los XSD oficiales |

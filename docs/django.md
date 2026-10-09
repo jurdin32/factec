@@ -1103,6 +1103,9 @@ el circuito funciona, en el script de servicios hay un atajo:
 python manage.py servicios_celery --estado
 ```
 
+La guía del panel (pantallas, estados, API para monitorizar y qué mirar cuando algo
+falla) está en [flower.md](flower.md).
+
 #### Servicios de systemd (Linux)
 
 El comando `servicios_celery` crea los tres servicios (worker, beat y Flower)

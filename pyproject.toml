@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "factec"
-version = "1.8.1"
+version = "1.8.2"
 description = "Facturación electrónica de Ecuador (SRI): clave de acceso, XML de todos los comprobantes, firma XAdES-BES y envío SOAP."
 readme = "README.md"
 requires-python = ">=3.9"
