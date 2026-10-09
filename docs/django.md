@@ -1195,6 +1195,7 @@ Redis responde:
 sudo python manage.py servicios_celery                      # crea y arranca
 python manage.py servicios_celery --comandos                # los comandos, ya con sus nombres
 python manage.py servicios_celery --plantillas              # los modelos .service, para editarlos a mano
+sudo python manage.py servicios_celery --enlazar            # sin copiar: systemd los usa desde el proyecto
 python manage.py servicios_celery --dry-run                 # enseña y no toca nada
 python manage.py servicios_celery --estado                  # Redis, worker, beat y Flower
 sudo python manage.py servicios_celery --reiniciar           # tras desplegar
@@ -1228,6 +1229,69 @@ imprime el `sed` que los sustituye y los `systemctl` para dejarlos instalados.
 Cada archivo lleva arriba su explicación y lo mismo el `env.ejemplo` (para qué
 sirve cada variable), así que se pueden editar a mano sin la documentación al
 lado.
+
+#### Sin copiar nada: enlazados desde el proyecto
+
+```bash
+sudo python manage.py servicios_celery --enlazar
+```
+
+Deja los `.service` en `<proyecto>/deploy/systemd/` y los habilita **por su ruta
+absoluta**: `systemctl enable --now <ruta>` crea el enlace en
+`/etc/systemd/system/` y el del arranque, así que el archivo nunca se copia. Al
+desplegar solo hay que recargar:
+
+```bash
+sudo systemctl daemon-reload          # tras editar los archivos del proyecto
+python manage.py servicios_celery --estado
+```
+
+El estado enseña de dónde viene cada unidad
+(`→ facturero-celery-worker.service: enlazada desde el proyecto`). Para quitarlas,
+`sudo python manage.py servicios_celery --quitar` desenlaza y borra el enlace,
+pero **deja los archivos del proyecto intactos**.
+
+Dos cosas que conviene saber antes de elegir esta forma:
+
+* **La carpeta del proyecto tiene que estar en el disco raíz.** systemd lee los
+  enlaces al arrancar el sistema: si el proyecto vive en `/home` o `/var` de otra
+  partición, en ese momento la unidad todavía no se puede leer y el servicio no
+  arranca (el `WorkingDirectory` también fallaría). El comando compara el sistema
+  de archivos con el de `/` y avisa si no coinciden; en ese caso use una carpeta
+  del disco raíz (`/srv/facturero`, `/opt/facturero`) o instale con copia.
+* **Los archivos quedan del usuario que despliega**, y quien pueda escribirlos
+  decide lo que ejecuta root. Si el usuario del servicio (`www-data`) puede
+  escribir en `deploy/systemd/`, quítelo:
+
+  ```bash
+  sudo chown -R root:root deploy/systemd && sudo chmod 644 deploy/systemd/*.service
+  ```
+
+#### Que arranquen solos al iniciar el sistema
+
+Es lo que hace `enable`: los `WantedBy=multi-user.target` de las unidades crean
+un enlace en `/etc/systemd/system/multi-user.target.wants/`. Con el comando del
+paquete ya queda hecho (`--enlazar` y la instalación normal usan `enable --now`);
+a mano, con los archivos ya en su sitio, son estas órdenes:
+
+```bash
+sudo systemctl daemon-reload                 # que systemd lea los archivos
+sudo systemctl enable --now facturero-celery-worker facturero-celery-beat facturero-flower
+systemctl is-enabled facturero-celery-worker facturero-celery-beat facturero-flower
+```
+
+`is-enabled` responde `enabled` (y `linked` si la unidad está enlazada pero ya no
+tiene el enlace de arranque: vuelva a ejecutar `enable`). Para comprobar que
+arrancaría tras un reinicio:
+
+```bash
+systemctl list-dependencies multi-user.target | grep facturero   # aparecen los tres
+journalctl -u facturero-celery-worker -f
+```
+
+Como los tres servicios llevan `Restart=always`, si el worker se cae vuelve solo;
+y beat es el que dispara la revisión de la firma y los reintentos, así que
+conviene dejar el arranque automático puesto.
 
 Las unidades quedan en `/etc/systemd/system/<proyecto>-celery-worker.service`,
 `…-celery-beat.service` y `…-flower.service`, con `Restart=always`, `journald`

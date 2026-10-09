@@ -286,7 +286,8 @@ las rutas del proyecto ya resueltas:
 ```bash
 sudo python manage.py servicios_celery                 # crea y arranca los tres
 python manage.py servicios_celery --comandos           # los comandos, ya con sus nombres
-python manage.py servicios_celery --plantillas         # los modelos .service, para editarlos a mano
+python manage.py servicios_celery --plantillas           # los modelos .service, para editarlos a mano
+sudo python manage.py servicios_celery --enlazar         # sin copiar: systemd los usa desde el proyecto
 python manage.py servicios_celery --dry-run            # enseña lo que haría
 python manage.py servicios_celery --estado             # ¿están funcionando?
 sudo python manage.py servicios_celery --reiniciar     # tras desplegar
@@ -306,6 +307,20 @@ arranca y comprueba que Redis responde. Los logs salen por journald:
 `journalctl -u <proyecto>-celery-worker -f`. El script que hace el trabajo viaja
 dentro del paquete: `python manage.py servicios_celery --ruta` dice dónde está
 (se puede copiar a otro servidor y ejecutar a mano).
+
+Si prefiere no copiar nada a `/etc/systemd/system`:
+
+```bash
+sudo python manage.py servicios_celery --enlazar
+```
+
+Las unidades se quedan en `<proyecto>/deploy/systemd/` y systemd las usa desde
+ahí (se habilitan por su ruta absoluta, que es lo que crea el enlace y el
+arranque automático); al desplegar basta `sudo systemctl daemon-reload`. A
+cambio, esa carpeta tiene que estar en el disco raíz: systemd lee los enlaces al
+arrancar y, si está en `/home` o `/var` de otra partición, el servicio no se
+encontrará. El comando lo avisa si lo detecta, y `--quitar` desenlaza sin tocar
+los archivos del proyecto.
 
 ### Comandos que vienen con el paquete
 

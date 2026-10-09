@@ -11,7 +11,14 @@
 #   ./instalar_servicios_celery.sh --estado                 # ¿están funcionando?
 #   ./instalar_servicios_celery.sh --reiniciar              # tras desplegar
 #   sudo ./instalar_servicios_celery.sh --quitar            # los elimina
+#   sudo ./instalar_servicios_celery.sh --enlazar           # sin copiar: se enlazan
 #   ./instalar_servicios_celery.sh --plantillas             # copia los modelos .service
+#
+# Con --enlazar las unidades no se copian a /etc/systemd/system: se quedan en la
+# carpeta del proyecto y systemd las usa desde ahí (systemctl enable con la ruta
+# absoluta crea el enlace). Se editan en el proyecto y basta un daemon-reload;
+# a cambio, la carpeta tiene que estar en el disco raíz (no en /home ni /var de
+# otra partición), porque systemd las lee al arrancar.
 #
 # Normalmente no hace falta llamarlo a mano: el paquete trae el comando
 #   python manage.py servicios_celery --dry-run
@@ -39,7 +46,10 @@ MODULO=""                                  # módulo de settings (se detecta)
 VENV="${VENV:-}"                           # entorno virtual (se detecta)
 USUARIO="${USUARIO_SERVICIO:-$(id -un)}"
 GRUPO="${GRUPO_SERVICIO:-$(id -gn)}"
-DESTINO="/etc/systemd/system"
+SYSTEMD_DIR="/etc/systemd/system"          # donde systemd busca las unidades
+DESTINO="$SYSTEMD_DIR"                     # donde las escribe este script
+DESTINO_INDICADO=0
+ENLAZAR=0                                  # 1: dejarlas en el proyecto y enlazarlas
 CONCURRENCIA="${CONCURRENCIA:-4}"
 LOGLEVEL="info"
 ACCION="instalar"                          # instalar | quitar | estado | reiniciar
@@ -51,6 +61,7 @@ DIRECCION_FLOWER="${DIRECCION_FLOWER:-127.0.0.1}"
 AUTH_FLOWER="${FLOWER_BASIC_AUTH:-}"       # usuario:clave (recomendado si no es local)
 DRY_RUN=0
 SOLO_ARCHIVOS=0
+SIN_SUDO=0                                 # 1: los archivos no necesitan sudo
 SUDO=""
 
 # ------------------------------------------------------------------ salida
@@ -96,6 +107,12 @@ Opciones:
   --destino DIR      Carpeta donde escribir las unidades
                      (por omisión, /etc/systemd/system; con --plantillas,
                      la carpeta donde copiar los modelos)
+  --enlazar          No las copia a /etc/systemd/system: las deja en la carpeta
+                     del proyecto (deploy/systemd) y las enlaza desde allí, así
+                     no hay que copiar nada al desplegar. La carpeta del proyecto
+                     debe estar en el disco raíz: systemd lee los enlaces al
+                     arrancar y, si está en /home o /var de otra partición, el
+                     servicio no se encontrará al iniciar el sistema.
   --solo-archivos    Escribe las unidades y no toca systemctl
                      (útil para revisarlas o copiarlas a otro servidor)
   --solo-worker      No crear los servicios del beat ni de Flower
@@ -110,6 +127,7 @@ Ejemplos:
   sudo ./instalar_servicios_celery.sh
   sudo ./instalar_servicios_celery.sh --concurrencia 2 --usuario www-data
   sudo ./instalar_servicios_celery.sh --direccion 0.0.0.0 --flower-auth juan:secreta
+  sudo ./instalar_servicios_celery.sh --enlazar          # sin copiar nada a /etc
   ./instalar_servicios_celery.sh --dry-run --destino /tmp/unidades
 
 Para ver el panel desde su ordenador (sin abrir el puerto al mundo):
@@ -128,6 +146,7 @@ while [ $# -gt 0 ]; do
     --reiniciar) ACCION="reiniciar" ;;
     --quitar) ACCION="quitar" ;;
     --plantillas) ACCION="plantillas" ;;
+    --enlazar|--enlaces) ENLAZAR=1 ;;
     --proyecto-dir) PROYECTO_DIR="${2:?falta la carpeta}"; shift ;;
     --nombre) NOMBRE="${2:?falta el nombre}"; shift ;;
     --modulo) MODULO="${2:?falta el módulo}"; shift ;;
@@ -136,7 +155,7 @@ while [ $# -gt 0 ]; do
     --grupo) GRUPO="${2:?falta el grupo}"; shift ;;
     --concurrencia) CONCURRENCIA="${2:?falta el número}"; shift ;;
     --loglevel) LOGLEVEL="${2:?falta el nivel}"; shift ;;
-    --destino) DESTINO="${2:?falta la carpeta}"; shift ;;
+    --destino) DESTINO="${2:?falta la carpeta}"; DESTINO_INDICADO=1; shift ;;
     --solo-archivos) SOLO_ARCHIVOS=1 ;;
     --solo-worker) CREAR_BEAT=0; CREAR_FLOWER=0 ;;
     --solo-beat) CREAR_WORKER=0; CREAR_FLOWER=0 ;;
@@ -162,6 +181,33 @@ comprobar_entorno() {
   if ! command -v systemctl >/dev/null 2>&1; then
     error "No hay systemctl: este servidor no usa systemd."
     exit 2
+  fi
+}
+
+ajustar_destino() {
+  # Con --enlazar las unidades viven en el proyecto (salvo que diga otra carpeta).
+  if [ "$ENLAZAR" -eq 1 ] && [ "$DESTINO_INDICADO" -eq 0 ]; then
+    DESTINO="$PROYECTO_DIR/deploy/systemd"
+  fi
+  SIN_SUDO=0
+  if [ "$SOLO_ARCHIVOS" -eq 1 ] || [ "$ENLAZAR" -eq 1 ]; then
+    SIN_SUDO=1
+  fi
+}
+
+comprobar_particion() {
+  # systemd lee los enlaces al arrancar: si la carpeta cuelga de otra partición
+  # (/home, /var…), al iniciar el sistema la unidad todavía no se puede leer.
+  [ "$ENLAZAR" -eq 1 ] || return 0
+  [ "$(uname -s)" = "Linux" ] || return 0
+  local aparato raiz
+  aparato="$(df -P "$DESTINO" 2>/dev/null | awk 'NR==2 {print $1}')"
+  raiz="$(df -P / 2>/dev/null | awk 'NR==2 {print $1}')"
+  if [ -n "$aparato" ] && [ -n "$raiz" ] && [ "$aparato" != "$raiz" ]; then
+    aviso "${DESTINO} está en otro sistema de archivos ($aparato), no en el del sistema ($raiz)."
+    info  "systemd lee los enlaces al arrancar: si ese sistema todavía no está montado,"
+    info  "los servicios no se encontrarán. Use una carpeta del disco raíz"
+    info  "(/srv/facturero, /opt/facturero…) o instale con copia (sin --enlazar)."
   fi
 }
 
@@ -233,7 +279,16 @@ comprobar_flower() {
 preparar_sudo() {
   if [ "$(id -u)" -eq 0 ]; then
     SUDO=""
-  elif [ -w "$(dirname "$DESTINO")" ] 2>/dev/null && [ -w "$DESTINO" ] 2>/dev/null; then
+    return 0
+  fi
+  if [ "$ENLAZAR" -eq 1 ]; then
+    # Los archivos se escriben en la carpeta del proyecto (sin sudo), pero
+    # systemctl necesita root para enlazarlos y habilitarlos.
+    SUDO="sudo"
+    info "Se pedirá la contraseña de sudo para enlazar los servicios."
+    return 0
+  fi
+  if [ -w "$(dirname "$DESTINO")" ] 2>/dev/null && [ -w "$DESTINO" ] 2>/dev/null; then
     SUDO=""
   else
     if ! command -v sudo >/dev/null 2>&1; then
@@ -323,6 +378,23 @@ nombre_worker() { printf '%s-celery-worker.service' "$NOMBRE"; }
 nombre_beat()   { printf '%s-celery-beat.service' "$NOMBRE"; }
 nombre_flower() { printf '%s-flower.service' "$NOMBRE"; }
 ruta_unidad()   { printf '%s/%s' "$DESTINO" "$1"; }
+ruta_en_systemd() { printf '%s/%s' "$SYSTEMD_DIR" "$1"; }
+archivo_unidad() {
+  # El archivo que systemd está leyendo: el de /etc si está, si no el del proyecto.
+  local en_systemd; en_systemd="$(ruta_en_systemd "$1")"
+  if [ -e "$en_systemd" ] || [ -L "$en_systemd" ]; then
+    printf '%s' "$en_systemd"
+  else
+    printf '%s' "$(ruta_unidad "$1")"
+  fi
+}
+es_enlace() { [ -L "$(ruta_en_systemd "$1")" ]; }
+destino_de_enlace() { readlink "$(ruta_en_systemd "$1")" 2>/dev/null || true; }
+systemd_conoce() { command -v systemctl >/dev/null 2>&1 && systemctl cat "$1" >/dev/null 2>&1; }
+objetivo() {
+  # Lo que hay que habilitar: la ruta absoluta (enlazar) o el nombre (copiar).
+  if [ "$ENLAZAR" -eq 1 ]; then printf '%s' "$(ruta_unidad "$1")"; else printf '%s' "$1"; fi
+}
 
 escribir_unidad() {
   local archivo="$1"; shift
@@ -331,7 +403,9 @@ escribir_unidad() {
     "$@"
     return 0
   fi
-  if [ "$SOLO_ARCHIVOS" -eq 1 ] && [ -w "$DESTINO" ]; then
+  if [ "$SIN_SUDO" -eq 1 ] && { [ -w "$DESTINO" ] || [ -w "$(dirname "$DESTINO")" ]; }; then
+    # En el proyecto se escribe sin sudo: los archivos quedan del usuario que
+    # despliega (root solo los lee).
     mkdir -p "$DESTINO"
     "$@" > "$(ruta_unidad "$archivo")"
   else
@@ -341,13 +415,51 @@ escribir_unidad() {
   ok "Unidad escrita: $(ruta_unidad "$archivo")"
 }
 
+enlazar_unidades() {
+  # Deja las unidades en la carpeta del proyecto y las enlaza en /etc/systemd/system.
+  # `systemctl enable` con la ruta absoluta hace las dos cosas: el enlace en el
+  # directorio de unidades y el .wants del arranque. El archivo no se copia.
+  local unidad ruta destino apunta
+  $SUDO systemctl daemon-reload
+  for unidad in "$(nombre_worker)" "$(nombre_beat)" "$(nombre_flower)"; do
+    case "$unidad" in
+      "$(nombre_worker)") [ "$CREAR_WORKER" -eq 1 ] || continue ;;
+      "$(nombre_beat)")   [ "$CREAR_BEAT" -eq 1 ]   || continue ;;
+      "$(nombre_flower)") [ "$CREAR_FLOWER" -eq 1 ] || continue ;;
+    esac
+    ruta="$(ruta_unidad "$unidad")"
+    [ -f "$ruta" ] || continue
+    destino="$(ruta_en_systemd "$unidad")"
+    if [ -L "$destino" ]; then
+      apunta="$(destino_de_enlace "$unidad")"
+      if [ "$apunta" != "$ruta" ]; then
+        aviso "$destino apuntaba a $apunta: se vuelve a enlazar."
+        $SUDO rm -f "$destino"
+      fi
+    elif [ -e "$destino" ]; then
+      aviso "$destino es una copia de una instalación anterior: se cambia por el enlace."
+      $SUDO systemctl disable "$unidad" >/dev/null 2>&1 || true
+      $SUDO rm -f "$destino"
+    fi
+    $SUDO systemctl enable --now "$ruta" >/dev/null
+    ok "$unidad enlazada y arrancada desde el proyecto."
+  done
+  $SUDO systemctl daemon-reload
+  info "Para comprobarlo:  systemctl is-enabled $(nombre_worker)   y   systemctl cat $(nombre_worker)"
+  info "Editarlas en el proyecto solo pide después:  sudo systemctl daemon-reload"
+}
+
 # ---------------------------------------------------------------- acciones
 
 instalar() {
   info "Proyecto : $PROYECTO_DIR (módulo $MODULO)"
   info "Entorno  : $VENV"
   info "Usuario  : $USUARIO:$GRUPO"
-  info "Destino  : $DESTINO"
+  if [ "$ENLAZAR" -eq 1 ]; then
+    info "Destino  : $DESTINO (las unidades se quedan aquí y systemd las enlaza)"
+  else
+    info "Destino  : $DESTINO"
+  fi
   if [ "$CREAR_FLOWER" -eq 1 ]; then
     info "Flower   : http://$DIRECCION_FLOWER:$PUERTO_FLOWER${AUTH_FLOWER:+ (con usuario y clave)}"
   fi
@@ -364,22 +476,40 @@ instalar() {
 
   if [ "$SOLO_ARCHIVOS" -eq 1 ]; then
     aviso "Unidades escritas en $DESTINO. No se toca systemctl (--solo-archivos)."
-    info  "En el servidor:  sudo cp $DESTINO/*.service /etc/systemd/system/ && sudo systemctl daemon-reload"
+    if [ "$ENLAZAR" -eq 1 ]; then
+      info  "En el servidor, enlazarlas desde ahí (sin copiarlas):"
+      manda "sudo systemctl enable --now $DESTINO/$(nombre_worker)"
+    else
+      info  "En el servidor:  sudo cp $DESTINO/*.service $SYSTEMD_DIR/ && sudo systemctl daemon-reload"
+    fi
     return 0
   fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
     printf '\n%s\n' "${NEGRITA}Comandos que ejecutaría:${APAGADO}"
     manda "systemctl daemon-reload"
-    [ "$CREAR_WORKER" -eq 1 ] && manda "systemctl enable --now $(nombre_worker)"
-    [ "$CREAR_BEAT" -eq 1 ] && manda "systemctl enable --now $(nombre_beat)"
-    [ "$CREAR_FLOWER" -eq 1 ] && manda "systemctl enable --now $(nombre_flower)"
+    [ "$CREAR_WORKER" -eq 1 ] && manda "systemctl enable --now $(objetivo "$(nombre_worker)")"
+    [ "$CREAR_BEAT" -eq 1 ] && manda "systemctl enable --now $(objetivo "$(nombre_beat)")"
+    [ "$CREAR_FLOWER" -eq 1 ] && manda "systemctl enable --now $(objetivo "$(nombre_flower)")"
     manda "systemctl status $(nombre_worker)"
+    if [ "$ENLAZAR" -eq 1 ]; then
+      printf '\n%s\n' "Con la ruta absoluta, systemctl enlaza la unidad en $SYSTEMD_DIR"
+      printf '%s\n' "y crea el enlace de arranque (multi-user.target.wants): el archivo no se copia."
+    fi
     aviso "Nada se ha tocado (--dry-run)."
     return 0
   fi
 
   preparar_sudo
+
+  if [ "$ENLAZAR" -eq 1 ]; then
+    enlazar_unidades
+    sleep 3
+    estado
+    comprobar_redis
+    return 0
+  fi
+
   $SUDO systemctl daemon-reload
   if [ "$CREAR_WORKER" -eq 1 ]; then
     $SUDO systemctl enable --now "$(nombre_worker)" >/dev/null
@@ -401,11 +531,18 @@ instalar() {
 
 quitar() {
   preparar_sudo
-  local unidad
+  local unidad destino
   for unidad in "$(nombre_worker)" "$(nombre_beat)" "$(nombre_flower)"; do
-    if [ -f "$(ruta_unidad "$unidad")" ]; then
+    destino="$(ruta_en_systemd "$unidad")"
+    if [ -L "$destino" ]; then
+      local apunta; apunta="$(destino_de_enlace "$unidad")"
       $SUDO systemctl disable --now "$unidad" >/dev/null 2>&1 || true
-      $SUDO rm -f "$(ruta_unidad "$unidad")"
+      $SUDO rm -f "$destino"
+      ok "Desenlazada $unidad"
+      info "El archivo del proyecto no se toca: $apunta"
+    elif [ -f "$destino" ]; then
+      $SUDO systemctl disable --now "$unidad" >/dev/null 2>&1 || true
+      $SUDO rm -f "$destino"
       ok "Eliminada $unidad"
     fi
   done
@@ -418,7 +555,10 @@ reiniciar() {
   preparar_sudo
   local unidad
   for unidad in "$(nombre_worker)" "$(nombre_beat)" "$(nombre_flower)"; do
-    [ -f "$(ruta_unidad "$unidad")" ] || continue
+    if ! systemd_conoce "$unidad"; then
+      info "No veo $unidad instalada; la salto."
+      continue
+    fi
     $SUDO systemctl restart "$unidad"
     ok "Reiniciada $unidad"
   done
@@ -530,6 +670,12 @@ comandos() {
   manda "sudo $python manage.py servicios_celery"
   printf '\n'
 
+  printf '%s\n' "${NEGRITA}Sin copiar nada: enlazados desde el proyecto${APAGADO}"
+  manda "sudo $python manage.py servicios_celery --enlazar"
+  printf '%s\n' "    (deja los .service en $PROYECTO_DIR/deploy/systemd y systemd los"
+  printf '%s\n' "     enlaza en $SYSTEMD_DIR; al desplegar no hay que copiar nada)"
+  printf '\n'
+
   printf '%s\n' "${NEGRITA}Comprobar, sin arrancar nada${APAGADO}"
   manda "$python manage.py servicios_celery --estado"
   manda "$celery -A $MODULO inspect registered"
@@ -587,7 +733,7 @@ estado() {
         aviso "Flower está activo pero no responde en el puerto $PUERTO_FLOWER."
       fi
     fi
-    if ! grep -q ' -E ' "$(ruta_unidad "$(nombre_worker)")" 2>/dev/null; then
+    if ! grep -q ' -E ' "$(archivo_unidad "$(nombre_worker)")" 2>/dev/null; then
       aviso "El worker no envía eventos (-E): Flower verá el worker pero no las tareas."
       info  "Vuelva a generar las unidades con este script para añadirlo."
     fi
@@ -606,6 +752,12 @@ estado() {
   fi
 
   local unidad
+  for unidad in "$(nombre_worker)" "$(nombre_beat)" "$(nombre_flower)"; do
+    if es_enlace "$unidad"; then
+      printf '  %s %-28s %s\n' "${AZUL}→${APAGADO}" "$unidad" "enlazada desde el proyecto:"
+      printf '    %s %s\n' " " "$(destino_de_enlace "$unidad")"
+    fi
+  done
   for unidad in "$(nombre_worker)" "$(nombre_beat)" "$(nombre_flower)"; do
     if command -v systemctl >/dev/null 2>&1 && systemctl is-failed --quiet "$unidad" 2>/dev/null; then
       aviso "Últimas líneas de $unidad:"
@@ -646,6 +798,7 @@ case "$ACCION" in
     # El estado se puede consultar también en macOS o en un contenedor, y no
     # necesita permisos: solo mira y cuenta.
     detectar_proyecto
+    ajustar_destino
     detectar_venv
     estado
     comprobar_redis
@@ -653,18 +806,22 @@ case "$ACCION" in
   quitar)
     comprobar_entorno
     detectar_proyecto
+    ajustar_destino
     preparar_sudo
     quitar
     ;;
   reiniciar)
     comprobar_entorno
     detectar_proyecto
+    ajustar_destino
     detectar_venv
     preparar_sudo
     reiniciar
     ;;
   *)
     detectar_proyecto
+    ajustar_destino
+    comprobar_particion
     detectar_venv
     comprobar_flower
     if [ "$DRY_RUN" -eq 1 ] || [ "$SOLO_ARCHIVOS" -eq 1 ]; then

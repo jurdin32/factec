@@ -6,6 +6,11 @@
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now __NOMBRE__-celery-worker
 #   journalctl -u __NOMBRE__-celery-worker -f        # sus logs
+
+# O sin copiarlo: déjelo en la carpeta del proyecto y systemd lo usa desde ahí
+#   sudo systemctl enable --now /ruta/al/proyecto/deploy/systemd/__NOMBRE__-celery-worker.service
+#   (lo hace  sudo python manage.py servicios_celery --enlazar; la carpeta debe
+#    estar en el disco raíz, no en /home ni /var de otra partición)
 #
 # Lo único que hay que sustituir a mano son los datos del servidor:
 #   __USUARIO__    usuario con el que corre el servicio (p. ej. www-data)

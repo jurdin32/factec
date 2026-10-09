@@ -2490,3 +2490,33 @@ def test_el_comando_servicios_celery_copia_los_modelos(entorno_django, tmp_path)
 
     assert "Quedan cuatro marcadores" in salida.getvalue()
     assert "systemctl enable --now proyecto-celery-worker" in salida.getvalue()
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="los servicios son de Linux")
+def test_servicios_celery_puede_enlazarlos_desde_el_proyecto(entorno_django, tmp_path):
+    """--enlazar deja las unidades en el proyecto y las habilita por su ruta."""
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    proyecto = _proyecto_falso(tmp_path)
+    salida = StringIO()
+
+    call_command(
+        "servicios_celery", "--enlazar", "--dry-run",
+        "--proyecto-dir", str(proyecto), "--venv", sys.prefix, "--modulo", "mi_proyecto",
+        stdout=salida,
+    )
+
+    texto = salida.getvalue()
+    # Las unidades se quedan en el proyecto…
+    assert f"Destino  : {proyecto}/deploy/systemd" in texto
+    # …y systemd las habilita por su ruta absoluta (así crea el enlace y el arranque).
+    for servicio in ("celery-worker", "celery-beat", "flower"):
+        assert (
+            f"systemctl enable --now {proyecto}/deploy/systemd/proyecto-{servicio}.service"
+            in texto
+        )
+    assert "el archivo no se copia" in texto
+    # Nada de copiar a /etc.
+    assert "cp " not in texto.split("Comandos que ejecutaría")[1]
