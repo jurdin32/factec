@@ -778,7 +778,12 @@ def test_cada_seccion_lleva_sus_modelos(admin_cliente):
     html = _pagina_del_admin(admin_cliente, "/admin/")
 
     def modelos_de(titulo: str) -> str:
-        trozo = html[html.find(f'class="section">{titulo}') :]
+        # Se busca por el texto del enlace (no por sus atributos: el admin puede
+        # añadirle clases o títulos según la versión de Django).
+        posicion = html.find(f">{titulo}</a>")
+        if posicion < 0:
+            return ""
+        trozo = html[posicion:]
         return trozo[: trozo.find("</table>")]
 
     configuracion = modelos_de("Configuración del SRI")
@@ -2694,3 +2699,23 @@ def test_servicios_celery_enlaza_aunque_la_carpeta_no_exista(entorno_django, tmp
 
     assert f"Destino  : {destino}" in salida.getvalue()
     assert "systemctl enable --now" in salida.getvalue()
+
+
+def test_la_consulta_no_pregunta_por_un_pk_imposible(documentos, factura, cliente_falso):
+    """Una clave de acceso de 49 dígitos no cabe en un ``pk`` de SQLite.
+
+    Preguntar por ella como clave primaria revienta en Python 3.9 y 3.10 con
+    ``OverflowError: Python int too large to convert to SQLite INTEGER``; en las
+    versiones nuevas simplemente no encuentra nada. Se comprueba que el número no
+    llegue a la consulta.
+    """
+    from factec.django import consulta
+
+    registro = factura.emitir(encolar=False)
+
+    encontrado = consulta.leer(registro.clave_acceso)
+    assert encontrado.numero == "001-001-000000001"
+
+    # Y sigue aceptando el pk y la instancia.
+    assert consulta.leer(registro.pk).clave_acceso == registro.clave_acceso
+    assert consulta.leer(registro).pk == registro.pk

@@ -58,11 +58,20 @@ def _registro(objeto: Union[str, int, models.ComprobanteEmitido]) -> models.Comp
     if isinstance(objeto, models.ComprobanteEmitido):
         return objeto
 
+    #: Lo máximo que cabe en un ``pk`` de SQLite (2**63 − 1).
+    limite_de_pk = 2 ** 63 - 1
+
+    texto = str(objeto).strip()
     registro = None
-    if isinstance(objeto, int) or (isinstance(objeto, str) and objeto.isdigit()):
-        registro = models.ComprobanteEmitido.objects.filter(pk=int(objeto)).first()
-    if registro is None and isinstance(objeto, str) and len(objeto.strip()) >= 20:
-        registro = buscar_por_clave(objeto)
+
+    # Una clave de acceso tiene 49 dígitos: no cabe en un pk, y preguntar por él
+    # revienta (``OverflowError: Python int too large to convert to SQLite
+    # INTEGER`` en Python 3.9 y 3.10). Se pregunta solo si el número puede serlo.
+    puede_ser_pk = isinstance(objeto, int) or (texto.isdigit() and len(texto) <= 19)
+    if puede_ser_pk and int(texto) <= limite_de_pk:
+        registro = models.ComprobanteEmitido.objects.filter(pk=int(texto)).first()
+    if registro is None and len(texto) >= 20:
+        registro = buscar_por_clave(texto)
     if registro is None:
         raise models.ComprobanteEmitido.DoesNotExist(f"No hay comprobante para {objeto!r}.")
     return registro
