@@ -466,14 +466,17 @@ def _consultar(
 # ------------------------------------------------------------------ el recuadro
 
 
-def _colores(flujo: TextIO) -> bool:
-    """¿Se puede pintar? (hace falta una terminal y no vale ``NO_COLOR``)."""
-    if os.environ.get("NO_COLOR"):
-        return False
+def _hay_terminal(flujo: TextIO) -> bool:
+    """¿Hay una persona mirando? (los avisos del arranque solo salen con terminal)."""
     try:
         return bool(flujo.isatty())
     except Exception:  # noqa: BLE001 - flujos sin isatty (redirecciones raras)
         return False
+
+
+def _colores(flujo: TextIO) -> bool:
+    """¿Se puede pintar? Hace falta una terminal y que no haya ``NO_COLOR``."""
+    return _hay_terminal(flujo) and not os.environ.get("NO_COLOR")
 
 
 def _pinta(texto: str, estilo: str, color: bool) -> str:
@@ -619,7 +622,8 @@ def avisar_en_arranque(*, flujo: Optional[TextIO] = None) -> bool:
     """
     try:
         flujo = flujo if flujo is not None else sys.stderr
-        if sin_avisos() or not _colores(flujo):
+        # ``NO_COLOR`` quita los colores, no el aviso: lo que decide es la terminal.
+        if sin_avisos() or not _hay_terminal(flujo):
             return False
         informe = comprobar()
         if not informe.acaba_de_actualizarse:

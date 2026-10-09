@@ -270,6 +270,19 @@ def test_el_arranque_avisa_solo_cuando_la_version_es_nueva():
     assert actualizacion.leer()["vista"] == actualizacion.version_instalada()
 
 
+def test_el_arranque_avisa_aunque_no_quiera_colores(monkeypatch):
+    """Sin colores (`NO_COLOR`) el aviso sigue saliendo: son dos cosas distintas."""
+    actualizacion.guardar(ultima="1.12.0", vista="1.0.0")
+    monkeypatch.setenv("NO_COLOR", "1")
+    flujo = Terminal()
+
+    assert actualizacion.avisar_en_arranque(flujo=flujo) is True
+
+    texto = flujo.getvalue()
+    assert "factec actualizado" in texto
+    assert "\033[" not in texto
+
+
 def test_el_arranque_no_ensucia_los_registros_sin_terminal():
     actualizacion.guardar(ultima="1.12.0", vista="1.0.0")
     flujo = StringIO()          # sin isatty: como un archivo de registro
