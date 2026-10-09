@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "factec"
-version = "1.8.4"
+version = "1.9.0"
 description = "Facturación electrónica de Ecuador (SRI): clave de acceso, XML de todos los comprobantes, firma XAdES-BES y envío SOAP."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -54,7 +54,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 # El script de servicios de Linux viaja dentro del paquete: así
 # «python manage.py servicios_celery» lo encuentra también tras el pip install.
-factec = ["py.typed", "deploy/*.sh"]
+factec = ["py.typed", "deploy/*.sh", "deploy/systemd/*"]
 "factec.django" = [
     "migrations/*.py",
     "static/sri_fe/js/*.js",

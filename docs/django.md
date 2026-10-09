@@ -1194,6 +1194,7 @@ Redis responde:
 ```bash
 sudo python manage.py servicios_celery                      # crea y arranca
 python manage.py servicios_celery --comandos                # los comandos, ya con sus nombres
+python manage.py servicios_celery --plantillas              # los modelos .service, para editarlos a mano
 python manage.py servicios_celery --dry-run                 # enseña y no toca nada
 python manage.py servicios_celery --estado                  # Redis, worker, beat y Flower
 sudo python manage.py servicios_celery --reiniciar           # tras desplegar
@@ -1209,6 +1210,24 @@ Detrás está `instalar_servicios_celery.sh`, que viaja dentro del paquete (el
 comando le pasa el módulo de ajustes, el entorno virtual y la carpeta del
 proyecto). Se puede copiar a otro servidor y ejecutar a mano; con
 `--solo-archivos` deja las unidades donde le diga sin tocar systemctl.
+
+#### Los archivos, para tenerlos en el proyecto
+
+Si prefiere los `.service` dentro de su repositorio, para revisarlos o
+versionarlos:
+
+```bash
+python manage.py servicios_celery --plantillas --destino deploy/systemd
+```
+
+Copia los modelos con el nombre de su proyecto, el módulo y la concurrencia ya
+puestos (`<proyecto>-celery-worker.service`, `…-celery-beat.service`,
+`…-flower.service` y un `env.ejemplo`), y deja cuatro marcadores que dependen del
+servidor: `__USUARIO__`, `__GRUPO__`, `__PROYECTO__` y `__VENV__`. El comando
+imprime el `sed` que los sustituye y los `systemctl` para dejarlos instalados.
+Cada archivo lleva arriba su explicación y lo mismo el `env.ejemplo` (para qué
+sirve cada variable), así que se pueden editar a mano sin la documentación al
+lado.
 
 Las unidades quedan en `/etc/systemd/system/<proyecto>-celery-worker.service`,
 `…-celery-beat.service` y `…-flower.service`, con `Restart=always`, `journald`

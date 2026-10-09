@@ -1,0 +1,49 @@
+# Modelo de servicio de systemd para FLOWER (el panel de Celery).
+#
+# Cópielo al servidor, sustituya los marcadores y actívelo:
+#
+#   sudo cp flower.service /etc/systemd/system/facturero-flower.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now facturero-flower
+#
+# Marcadores: __USUARIO__ __GRUPO__ __PROYECTO__ __MODULO__ __VENV__ __NOMBRE__
+#   __DIRECCION__  dirección donde escucha (127.0.0.1 = solo local, lo más seguro)
+#   __PUERTO__     puerto del panel (5555 por omisión)
+#   __AUTH__      (solo Flower) usuario y clave si lo expone: --basic_auth=usuario:clave
+#
+# Para verlo desde su ordenador sin abrir el puerto:
+#   ssh -L 5555:127.0.0.1:5555 usuario@servidor
+
+[Unit]
+Description=Flower (panel de Celery)
+Documentation=https://github.com/jurdin32/factec
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USUARIO__
+Group=__GRUPO__
+WorkingDirectory=__PROYECTO__
+
+Environment="DJANGO_SETTINGS_MODULE=__MODULO__.settings"
+Environment="PYTHONUNBUFFERED=1"
+Environment="FORKED_BY_MULTIPROCESSING=1"
+EnvironmentFile=-__PROYECTO__/.env
+# Permite consultar su API (/api/tasks) sin credenciales. Si el panel se expone
+# fuera de la máquina, quite esta línea y use --basic_auth.
+Environment="FLOWER_UNAUTHENTICATED_API=1"
+
+StateDirectory=__NOMBRE__
+# Para conservar el histórico de tareas entre reinicios, añada:
+#   --persistent=True --db=/var/lib/__NOMBRE__/flower
+ExecStart=__VENV__/bin/celery -A __MODULO__ flower --address=__DIRECCION__ --port=__PUERTO__ __AUTH__
+
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

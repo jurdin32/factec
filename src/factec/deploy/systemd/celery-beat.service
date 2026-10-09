@@ -1,0 +1,45 @@
+# Modelo de servicio de systemd para CELERY BEAT (las tareas periódicas).
+#
+# Cópielo al servidor, sustituya los marcadores y actívelo:
+#
+#   sudo cp celery-beat.service /etc/systemd/system/facturero-celery-beat.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now facturero-celery-beat
+#
+# Marcadores: __USUARIO__ __GRUPO__ __PROYECTO__ __MODULO__ __VENV__ __NOMBRE__
+#   __NOMBRE__ es el nombre que tendrá el archivo de estado (p. ej. facturero)
+#
+# Beat revisa la firma electrónica todos los días a las 7:00 y reintenta cada
+# 10 minutos los comprobantes que quedaron a medias (CELERY_BEAT_SCHEDULE, que se
+# arma con factec.django.conf.planificador()).
+
+[Unit]
+Description=Celery beat (tareas periódicas: firma y reintentos)
+Documentation=https://github.com/jurdin32/factec
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USUARIO__
+Group=__GRUPO__
+WorkingDirectory=__PROYECTO__
+
+Environment="DJANGO_SETTINGS_MODULE=__MODULO__.settings"
+Environment="PYTHONUNBUFFERED=1"
+Environment="FORKED_BY_MULTIPROCESSING=1"
+EnvironmentFile=-__PROYECTO__/.env
+
+# systemd crea /var/lib/__NOMBRE__ con el usuario del servicio: ahí va el
+# calendario de beat (no hay que darle permisos a mano).
+StateDirectory=__NOMBRE__
+ExecStart=__VENV__/bin/celery -A __MODULO__ beat -l info --schedule=/var/lib/__NOMBRE__/celerybeat-schedule
+
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

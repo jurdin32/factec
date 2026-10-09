@@ -1,0 +1,56 @@
+# Modelo de servicio de systemd para el WORKER de Celery (Linux).
+#
+# Cópielo al servidor, sustituya los marcadores y actívelo:
+#
+#   sudo cp celery-worker.service /etc/systemd/system/facturero-celery-worker.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now facturero-celery-worker
+#   journalctl -u facturero-celery-worker -f        # sus logs
+#
+# Marcadores (busque y sustituya):
+#   __USUARIO__       usuario con el que corre el servicio (p. ej. www-data)
+#   __GRUPO__         su grupo (puede ser el mismo)
+#   __PROYECTO__      carpeta del proyecto: la que tiene manage.py
+#   __MODULO__        carpeta con settings.py (el módulo de Django)
+#   __VENV__          entorno virtual con celery y factec
+#   __CONCURRENCIA__  procesos del worker (4 va bien para facturar)
+#
+# También puede generarlo ya sustituido, sin editar nada:
+#   sudo python manage.py servicios_celery
+
+[Unit]
+Description=Celery worker (facturación electrónica SRI)
+Documentation=https://github.com/jurdin32/factec
+# Si Redis es un servicio local, arranque el worker después de él:
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USUARIO__
+Group=__GRUPO__
+WorkingDirectory=__PROYECTO__
+
+# Ajustes de Django y del proceso.
+Environment="DJANGO_SETTINGS_MODULE=__MODULO__.settings"
+Environment="PYTHONUNBUFFERED=1"
+# En macOS/Windows hace falta por el pool «spawn»; en Linux es inofensivo.
+Environment="FORKED_BY_MULTIPROCESSING=1"
+# Secretos y variables que no quiere tener en el código (opcional):
+EnvironmentFile=-__PROYECTO__/.env
+
+# El worker ejecuta las tareas del paquete (sri_fe.emitir_comprobante…).
+# --without-mingle/--without-gossip: sin tráfico de coordinación innecesario.
+# Si quiere que Flower vea las tareas, añada -E aquí o ponga
+# CELERY_WORKER_SEND_TASK_EVENTS = True en settings.py.
+ExecStart=__VENV__/bin/celery -A __MODULO__ worker -l info -c __CONCURRENCIA__ --without-mingle --without-gossip
+
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

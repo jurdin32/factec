@@ -2450,3 +2450,43 @@ def test_el_comando_servicios_celery_enseña_los_comandos_del_proyecto(entorno_d
     assert f"{sys.prefix}/bin/celery -A mi_proyecto flower" in texto
     assert f"{sys.prefix}/bin/python manage.py servicios_celery" in texto
     assert "mi_proyecto" in texto and "celery del entorno virtual" in texto
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="los servicios son de Linux")
+def test_el_comando_servicios_celery_copia_los_modelos(entorno_django, tmp_path):
+    """Los modelos .service para editar a mano, con el nombre del proyecto."""
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    proyecto = _proyecto_falso(tmp_path)
+    destino = tmp_path / "deploy" / "systemd"
+    salida = StringIO()
+
+    call_command(
+        "servicios_celery", "--plantillas", "--destino", str(destino),
+        "--proyecto-dir", str(proyecto), "--venv", sys.prefix, "--modulo", "mi_proyecto",
+        stdout=salida,
+    )
+
+    archivos = sorted(p.name for p in destino.iterdir())
+    assert archivos == [
+        "env.ejemplo",
+        "proyecto-celery-beat.service",
+        "proyecto-celery-worker.service",
+        "proyecto-flower.service",
+    ]
+
+    worker = (destino / "proyecto-celery-worker.service").read_text(encoding="utf-8")
+    # El módulo y el nombre ya están puestos; solo quedan los del servidor.
+    assert "DJANGO_SETTINGS_MODULE=mi_proyecto.settings" in worker
+    assert "celery -A mi_proyecto worker" in worker
+    for marcador in ("__USUARIO__", "__GRUPO__", "__PROYECTO__", "__VENV__"):
+        assert marcador in worker
+    assert "__MODULO__" not in worker
+
+    flower = (destino / "proyecto-flower.service").read_text(encoding="utf-8")
+    assert "flower --address=127.0.0.1 --port=5555" in flower
+
+    assert "Quedan cuatro marcadores" in salida.getvalue()
+    assert "systemctl enable --now proyecto-celery-worker" in salida.getvalue()

@@ -11,6 +11,7 @@
 #   ./instalar_servicios_celery.sh --estado                 # ¿están funcionando?
 #   ./instalar_servicios_celery.sh --reiniciar              # tras desplegar
 #   sudo ./instalar_servicios_celery.sh --quitar            # los elimina
+#   ./instalar_servicios_celery.sh --plantillas             # copia los modelos .service
 #
 # Normalmente no hace falta llamarlo a mano: el paquete trae el comando
 #   python manage.py servicios_celery --dry-run
@@ -26,6 +27,9 @@
 # ssh -L 5555:127.0.0.1:5555 usuario@servidor).
 #
 set -euo pipefail
+
+#: Carpeta de este script, donde están los modelos de ``systemd/``.
+DIR_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ------------------------------------------------------------------ valores
 
@@ -77,6 +81,8 @@ Acciones (una sola):
   --comandos         Enseña los comandos para este proyecto (con sus nombres)
   --reiniciar        Reinicia los servicios ya instalados
   --quitar           Para, deshabilita y borra las unidades
+  --plantillas       Copia los modelos .service (worker, beat y Flower) y el
+                     ejemplo de .env, para editarlos a mano
 
 Opciones:
   --proyecto-dir DIR Carpeta del proyecto (por omisión, la actual)
@@ -88,7 +94,8 @@ Opciones:
   --concurrencia N   Procesos del worker (por omisión, 4)
   --loglevel NIVEL   info, debug, warning (por omisión, info)
   --destino DIR      Carpeta donde escribir las unidades
-                     (por omisión, /etc/systemd/system)
+                     (por omisión, /etc/systemd/system; con --plantillas,
+                     la carpeta donde copiar los modelos)
   --solo-archivos    Escribe las unidades y no toca systemctl
                      (útil para revisarlas o copiarlas a otro servidor)
   --solo-worker      No crear los servicios del beat ni de Flower
@@ -120,6 +127,7 @@ while [ $# -gt 0 ]; do
     --comandos) ACCION="comandos" ;;
     --reiniciar) ACCION="reiniciar" ;;
     --quitar) ACCION="quitar" ;;
+    --plantillas) ACCION="plantillas" ;;
     --proyecto-dir) PROYECTO_DIR="${2:?falta la carpeta}"; shift ;;
     --nombre) NOMBRE="${2:?falta el nombre}"; shift ;;
     --modulo) MODULO="${2:?falta el módulo}"; shift ;;
@@ -418,6 +426,76 @@ reiniciar() {
   estado
 }
 
+plantillas() {
+  # Copia los modelos .service y el ejemplo de .env para editarlos a mano.
+  local destino="$DESTINO"
+  [ "$destino" = "/etc/systemd/system" ] && destino="$PROYECTO_DIR/deploy/systemd"
+  local origen="$DIR_SCRIPT/systemd"
+
+  if [ ! -d "$origen" ]; then
+    error "No encuentro los modelos en $origen"
+    exit 2
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    info "Copiaría de $origen a $destino (como $NOMBRE-*.service):"
+    for archivo in celery-worker celery-beat flower; do
+      printf '    %s\n' "$NOMBRE-$archivo.service"
+    done
+    printf '    %s\n' "env.ejemplo"
+    aviso "Nada se ha tocado (--dry-run)."
+    return 0
+  fi
+
+  mkdir -p "$destino"
+  cp "$origen"/* "$destino"/
+
+  # Lo que ya sabemos de este proyecto se sustituye; solo quedan los marcadores
+  # que dependen del servidor (usuario, carpetas).
+  local archivo
+  for archivo in "$destino"/facturero-*.service "$destino"/*.service; do
+    [ -f "$archivo" ] || continue
+    sed -i.bak \
+      -e "s|__MODULO__|$MODULO|g" \
+      -e "s|__NOMBRE__|$NOMBRE|g" \
+      -e "s|__CONCURRENCIA__|$CONCURRENCIA|g" \
+      -e "s|__DIRECCION__|$DIRECCION_FLOWER|g" \
+      -e "s|__PUERTO__|$PUERTO_FLOWER|g" \
+      -e "s|__AUTH__|${AUTH_FLOWER:+--basic_auth=$AUTH_FLOWER}|g" \
+      "$archivo"
+    rm -f "$archivo.bak"
+  done
+  # Los archivos se llaman como el servicio: así el cp al servidor no confunde.
+  for archivo in celery-worker celery-beat flower; do
+    [ -f "$destino/$archivo.service" ] || continue
+    mv "$destino/$archivo.service" "$destino/$NOMBRE-$archivo.service"
+  done
+
+  ok "Modelos copiados en $destino:"
+  for archivo in "$destino/$NOMBRE-celery-worker.service" \
+                 "$destino/$NOMBRE-celery-beat.service" \
+                 "$destino/$NOMBRE-flower.service" \
+                 "$destino/env.ejemplo"; do
+    [ -f "$archivo" ] && printf '    %s\n' "$(basename "$archivo")"
+  done
+
+  printf '\n%s\n' "${NEGRITA}Quedan cuatro marcadores, que son cosas del servidor${APAGADO}"
+  printf '    %-16s %s\n' "__USUARIO__" "usuario del servicio (en su servidor, p. ej. www-data)"
+  printf '    %-16s %s\n' "__GRUPO__" "su grupo"
+  printf '    %-16s %s\n' "__PROYECTO__" "carpeta del proyecto en el servidor"
+  printf '    %-16s %s\n' "__VENV__" "entorno virtual del servidor"
+
+  printf '\n%s\n' "${NEGRITA}Ejemplo, en el servidor${APAGADO}"
+  manda "sed -i 's|__USUARIO__|www-data|g; s|__GRUPO__|www-data|g;"
+  manda "        s|__PROYECTO__|/var/www/$NOMBRE|g; s|__VENV__|/var/www/$NOMBRE/.venv|g' *.service"
+  printf '\n%s\n' "${NEGRITA}Y déjelos como servicios${APAGADO}"
+  manda "sudo cp *.service /etc/systemd/system/"
+  manda "sudo systemctl daemon-reload"
+  manda "sudo systemctl enable --now $NOMBRE-celery-worker $NOMBRE-celery-beat $NOMBRE-flower"
+  manda "sudo cp env.ejemplo $PROYECTO_DIR/.env   # y complete los secretos"
+  printf '\n%s\n' "Si prefiere no editar nada: sudo python manage.py servicios_celery ya los deja listos y arrancados."
+}
+
 comandos() {
   # Los comandos exactos de ESTE proyecto: el módulo y el entorno virtual ya
   # resueltos, para no tener que sustituir «mi_proyecto» a mano.
@@ -428,7 +506,11 @@ comandos() {
 
   printf '\n%s\n\n' "${NEGRITA}Comandos para $NOMBRE${APAGADO}"
 
-  printf '%s\n' "${NEGRITA}El broker${APAGADO} (Redis; el paquete lo busca en CELERY_BROKER_URL)"
+  printf '%s\n' "${NEGRITA}Primero, sitúese en la carpeta del proyecto${APAGADO} (donde está manage.py)"
+  manda "cd $PROYECTO_DIR"
+  printf '%s\n\n' "    (si no, «celery -A ${MODULO}» no encuentra el módulo: importa la carpeta, no el paquete)"
+
+  printf '\n%s\n' "${NEGRITA}El broker${APAGADO} (Redis; el paquete lo busca en CELERY_BROKER_URL)"
   manda "redis-server"
   printf '\n'
 
@@ -452,6 +534,7 @@ comandos() {
   manda "$python manage.py servicios_celery --estado"
   manda "$celery -A $MODULO inspect registered"
   printf '\n%s\n' "${AMARILLO}!${APAGADO} Use el celery del entorno virtual ($VENV): active el venv o llámelo por su ruta."
+  printf '%s\n' "${AMARILLO}!${APAGADO} Y ejecútelo desde ${PROYECTO_DIR}: el módulo «${MODULO}» se importa desde ahí."
 }
 
 estado_procesos_sin_systemd() {
@@ -547,6 +630,12 @@ comprobar_redis() {
 # -------------------------------------------------------------------- main
 
 case "$ACCION" in
+  plantillas)
+    # No necesita systemd ni permisos: solo copia los modelos.
+    detectar_proyecto
+    detectar_venv
+    plantillas
+    ;;
   comandos)
     # Sirve en cualquier sistema: solo imprime los comandos del proyecto.
     detectar_proyecto

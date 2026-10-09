@@ -286,6 +286,7 @@ las rutas del proyecto ya resueltas:
 ```bash
 sudo python manage.py servicios_celery                 # crea y arranca los tres
 python manage.py servicios_celery --comandos           # los comandos, ya con sus nombres
+python manage.py servicios_celery --plantillas         # los modelos .service, para editarlos a mano
 python manage.py servicios_celery --dry-run            # enseña lo que haría
 python manage.py servicios_celery --estado             # ¿están funcionando?
 sudo python manage.py servicios_celery --reiniciar     # tras desplegar
@@ -293,6 +294,8 @@ sudo python manage.py servicios_celery --quitar        # los elimina
 
 sudo python manage.py servicios_celery --sin-flower                       # sin panel
 sudo python manage.py servicios_celery --concurrencia 2 --usuario www-data
+
+python manage.py servicios_celery --plantillas --destino deploy/systemd   # solo los archivos
 sudo python manage.py servicios_celery --direccion 0.0.0.0 \
      --flower-auth juan:secreta                                           # panel expuesto
 ```
