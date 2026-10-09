@@ -23,7 +23,7 @@ from django.core.validators import FileExtensionValidator
 from django.db import models, transaction
 from django.utils import timezone
 
-from ..catalogos import DESCRIPCION_AMBIENTE, Ambiente, leer_ambiente
+from ..catalogos import DESCRIPCION_AMBIENTE, ETIQUETA_AMBIENTE, Ambiente, leer_ambiente
 from .campos_adicionales import (
     MAXIMO_CAMPOS_ADICIONALES,
     leer_campos_adicionales,
@@ -71,10 +71,10 @@ def es_modelo_guardado(objeto: Any) -> bool:
     )
 
 
-#: Nombre y explicación de cada ambiente, tal como se elige en el admin.
+#: Opciones del ambiente tal como se eligen en el admin («1 - Pruebas»…).
 OPCIONES_AMBIENTE: List[tuple] = [
-    (int(Ambiente.PRUEBAS), DESCRIPCION_AMBIENTE[int(Ambiente.PRUEBAS)]),
-    (int(Ambiente.PRODUCCION), DESCRIPCION_AMBIENTE[int(Ambiente.PRODUCCION)]),
+    (int(Ambiente.PRUEBAS), ETIQUETA_AMBIENTE[int(Ambiente.PRUEBAS)]),
+    (int(Ambiente.PRODUCCION), ETIQUETA_AMBIENTE[int(Ambiente.PRODUCCION)]),
 ]
 
 
@@ -394,7 +394,8 @@ class ComprobanteEmitido(models.Model):
         default=TipoComprobante.FACTURA,
     )
     ambiente = models.PositiveSmallIntegerField(
-        "ambiente", default=1, help_text="1 = pruebas, 2 = producción.",
+        "ambiente", default=int(Ambiente.PRUEBAS), choices=OPCIONES_AMBIENTE,
+        help_text="Ambiente en el que se emitió: pruebas o producción.",
     )
     tipo_emision = models.CharField("tipo de emisión", max_length=1, default="1")
     estab = models.CharField("establecimiento", max_length=3, default="001")
@@ -659,7 +660,9 @@ class Secuencial(models.Model):
     tipo_comprobante = models.CharField(max_length=2, choices=TipoComprobante.choices)
     estab = models.CharField(max_length=3)
     pto_emi = models.CharField(max_length=3)
-    ambiente = models.PositiveSmallIntegerField(default=1)
+    ambiente = models.PositiveSmallIntegerField(
+        "ambiente", default=int(Ambiente.PRUEBAS), choices=OPCIONES_AMBIENTE
+    )
     ultimo = models.PositiveIntegerField(default=0)
     actualizado = models.DateTimeField(auto_now=True)
 

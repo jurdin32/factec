@@ -62,6 +62,7 @@ __all__ = [
     "DESCRIPCION_TIPO_COMPROBANTE",
     "NOMBRES_AMBIENTE",
     "DESCRIPCION_AMBIENTE",
+    "ETIQUETA_AMBIENTE",
     "leer_ambiente",
     "PORCENTAJE_IVA",
     "PORCENTAJE_RETENCION_IVA",
@@ -273,10 +274,16 @@ NOMBRES_AMBIENTE: Dict[str, int] = {
     "real": int(Ambiente.PRODUCCION),
 }
 
-#: Cómo se muestra cada ambiente (para mensajes y ayuda del admin).
+#: Etiqueta corta de cada ambiente, para desplegables y filtros del admin.
+ETIQUETA_AMBIENTE: Dict[int, str] = {
+    int(Ambiente.PRUEBAS): "1 - Pruebas",
+    int(Ambiente.PRODUCCION): "2 - Producción",
+}
+
+#: Cómo se explica cada ambiente (ayudas y mensajes).
 DESCRIPCION_AMBIENTE: Dict[int, str] = {
-    int(Ambiente.PRUEBAS): "Pruebas (1) — sin validez fiscal, para ensayar",
-    int(Ambiente.PRODUCCION): "Producción (2) — con validez legal ante el SRI",
+    int(Ambiente.PRUEBAS): "Pruebas (1): sin validez fiscal, para ensayar",
+    int(Ambiente.PRODUCCION): "Producción (2): con validez legal ante el SRI",
 }
 
 
