@@ -734,7 +734,7 @@ def _secciones(html: str) -> list:
     """Títulos de las secciones del índice, en el orden en que salen."""
     import re
 
-    return re.findall(r'<a href="[^"]*" class="section">([^<]+)</a>', html)
+    return re.findall(r'<a\b[^>]*class="section"[^>]*>([^<]+)</a>', html)
 
 
 def _pagina_del_admin(cliente, ruta: str) -> str:
@@ -750,10 +750,12 @@ def _pagina_del_admin(cliente, ruta: str) -> str:
         raise AssertionError(f"{ruta} devolvió {respuesta.status_code} ({destino})")
 
     html = respuesta.content.decode()
-    if 'class="section"' not in html:
+    if not _secciones(html):
+        posicion = html.find('class="section"')
+        alrededor = html[max(0, posicion - 140):posicion + 180] if posicion >= 0 else ""
         raise AssertionError(
-            f"{ruta} no trae secciones del admin: {len(html)} caracteres. "
-            f"Empieza por {html[:300]!r}"
+            f"{ruta} no trae secciones del admin ({len(html)} caracteres). "
+            f"Alrededor de class=\"section\": {alrededor!r}"
         )
     return html
 
