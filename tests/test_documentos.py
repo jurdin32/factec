@@ -2718,4 +2718,4 @@ def test_la_consulta_no_pregunta_por_un_pk_imposible(documentos, factura, client
 
     # Y sigue aceptando el pk y la instancia.
     assert consulta.leer(registro.pk).clave_acceso == registro.clave_acceso
-    assert consulta.leer(registro).pk == registro.pk
+    assert consulta.leer(registro).clave_acceso == registro.clave_acceso
