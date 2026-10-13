@@ -58,6 +58,8 @@ __all__ = [
     "escribir_campos_adicionales",
     "leer_campos_adicionales",
     "Cliente",
+    "Conductor",
+    "Vehiculo",
     "Producto",
     "TipoProducto",
     "UNIDAD_POR_TIPO",
@@ -252,6 +254,56 @@ class Cliente(models.Model):
             defaults={"razon_social": "CONSUMIDOR FINAL"},
         )
         return cliente
+
+
+class Conductor(models.Model):
+    """Quién lleva la mercadería en una guía de remisión.
+
+    El SRI pide su nombre, su identificación y su tipo de identificación: es el bloque
+    ``transportista`` del comprobante. Se da de alta una vez y se elige en cada guía.
+    """
+
+    razon_social = models.CharField(
+        "nombre", max_length=300, help_text="Como consta en su cédula o su RUC."
+    )
+    identificacion = models.CharField("identificación", max_length=20, db_index=True)
+    tipo_identificacion = models.CharField(
+        "tipo de identificación", max_length=2, choices=OPCIONES_TIPO_IDENTIFICACION,
+        default=IDENTIFICACION_POR_OMISION,
+    )
+    telefono = models.CharField("teléfono", max_length=20, blank=True)
+    activo = models.BooleanField(
+        "activo", default=True, help_text="Solo los activos se ofrecen en la guía."
+    )
+
+    class Meta:
+        verbose_name = "conductor"
+        verbose_name_plural = "conductores"
+        ordering = ["razon_social"]
+
+    def __str__(self) -> str:
+        return f"{self.razon_social} ({self.identificacion})"
+
+
+class Vehiculo(models.Model):
+    """El vehículo que lleva la mercadería: la ``placa`` que pide el SRI."""
+
+    placa = models.CharField("placa", max_length=10, unique=True)
+    descripcion = models.CharField(
+        "descripción", max_length=100, blank=True,
+        help_text="Marca, modelo o como lo llamen en el taller.",
+    )
+    activo = models.BooleanField(
+        "activo", default=True, help_text="Solo los activos se ofrecen en la guía."
+    )
+
+    class Meta:
+        verbose_name = "vehículo"
+        verbose_name_plural = "vehículos"
+        ordering = ["placa"]
+
+    def __str__(self) -> str:
+        return f"{self.placa} {self.descripcion}".strip()
 
 
 class Producto(models.Model):
