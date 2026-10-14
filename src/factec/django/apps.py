@@ -44,8 +44,13 @@ class FactecConfig(AppConfig):
         from . import checks  # noqa: F401  (el import registra los checks)
 
         if apps.is_installed("django.contrib.admin"):
-            from . import admin_agrupado
+            from . import admin_agrupado, admin_registro
 
+            # El admin se descubre antes de este ``ready``: aquí se registran los
+            # modelos del paquete que el proyecto no haya registrado ya, para que
+            # el suyo (si lo tiene) mande en vez de chocar con un
+            # ``AlreadyRegistered``.
+            admin_registro.registrar_los_pendientes()
             admin_agrupado.organizar_el_indice()
 
         # Si se acaba de actualizar el paquete, se cuenta una vez (y solo con una

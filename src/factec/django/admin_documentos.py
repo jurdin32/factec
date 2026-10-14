@@ -22,11 +22,14 @@ from .admin_filtros import (
     filtro_por_fecha,
     filtro_por_importe,
 )
+from .admin_registro import registrar
 from .forms import LineaDocumentoForm
 
 __all__ = [
     "ClienteAdmin",
     "ProductoAdmin",
+    "ConductorAdmin",
+    "VehiculoAdmin",
     "FacturaAdmin",
     "LiquidacionCompraAdmin",
     "NotaCreditoAdmin",
@@ -51,7 +54,7 @@ COLORES_ESTADO = {
 # ------------------------------------------------------------------ catálogos
 
 
-@admin.register(documentos.Cliente)
+@registrar(documentos.Cliente)
 class ClienteAdmin(AdminConAjustes):
     """Clientes, proveedores y sujetos retenidos."""
 
@@ -81,7 +84,7 @@ class ClienteAdmin(AdminConAjustes):
         return getattr(obj, "_notas", 0) or 0
 
 
-@admin.register(documentos.Producto)
+@registrar(documentos.Producto)
 class ProductoAdmin(AdminConAjustes):
     """Catálogo de lo que se vende: bienes y servicios.
 
@@ -169,6 +172,67 @@ class ProductoAdmin(AdminConAjustes):
                 "datos_adicionales": producto.datos_adicionales,
             }
         )
+
+
+@registrar(documentos.Conductor)
+class ConductorAdmin(AdminConAjustes):
+    """Transportistas y choferes: quién traslada la mercadería en la guía."""
+
+    list_display = (
+        "razon_social", "identificacion", "tipo_identificacion", "telefono",
+        "activo", "guias_transportadas",
+    )
+    list_filter = ("tipo_identificacion", "activo")
+    search_fields = ("razon_social", "identificacion", "telefono")
+    list_editable = ("activo",)
+    list_per_page = 50
+    ordering = ("razon_social",)
+    fieldsets = (
+        ("Transportista / chofer", {
+            "fields": ("razon_social", "identificacion", "tipo_identificacion",
+                       "telefono", "activo"),
+            "description": "El SRI pide el nombre, la identificación y su tipo: es el "
+                           "bloque «transportista» de la guía de remisión. Elija el "
+                           "conductor en la guía y sus datos se copian solos.",
+        }),
+    )
+
+    def get_queryset(self, request: Any) -> Any:
+        from django.db.models import Count
+
+        return super().get_queryset(request).annotate(_guias=Count("guias", distinct=True))
+
+    @admin.display(description="Guías", ordering="_guias")
+    def guias_transportadas(self, obj: Any) -> int:
+        return getattr(obj, "_guias", 0) or 0
+
+
+@registrar(documentos.Vehiculo)
+class VehiculoAdmin(AdminConAjustes):
+    """Vehículos: de aquí sale la placa que pide la guía de remisión."""
+
+    list_display = ("placa", "descripcion", "activo", "guias_transportadas")
+    list_filter = ("activo",)
+    search_fields = ("placa", "descripcion")
+    list_editable = ("activo",)
+    list_per_page = 50
+    ordering = ("placa",)
+    fieldsets = (
+        ("Vehículo", {
+            "fields": ("placa", "descripcion", "activo"),
+            "description": "La placa es la que va al SRI. Elija el vehículo en la guía "
+                           "y la placa se copia sola.",
+        }),
+    )
+
+    def get_queryset(self, request: Any) -> Any:
+        from django.db.models import Count
+
+        return super().get_queryset(request).annotate(_guias=Count("guias", distinct=True))
+
+    @admin.display(description="Guías", ordering="_guias")
+    def guias_transportadas(self, obj: Any) -> int:
+        return getattr(obj, "_guias", 0) or 0
 
 
 # ------------------------------------------------------------------ auxiliares
@@ -424,7 +488,7 @@ class FacturaDetalleInline(LineaInline):
     model = documentos.FacturaDetalle
 
 
-@admin.register(documentos.Factura)
+@registrar(documentos.Factura)
 class FacturaAdmin(DocumentoAdmin):
     """Facturas electrónicas."""
 
@@ -477,7 +541,7 @@ class LiquidacionCompraDetalleInline(LineaInline):
     model = documentos.LiquidacionCompraDetalle
 
 
-@admin.register(documentos.LiquidacionCompra)
+@registrar(documentos.LiquidacionCompra)
 class LiquidacionCompraAdmin(DocumentoAdmin):
     """Liquidaciones de compra."""
 
@@ -524,7 +588,7 @@ class NotaCreditoDetalleInline(LineaInline):
     model = documentos.NotaCreditoDetalle
 
 
-@admin.register(documentos.NotaCredito)
+@registrar(documentos.NotaCredito)
 class NotaCreditoAdmin(DocumentoAdmin):
     """Notas de crédito."""
 
@@ -574,7 +638,7 @@ class NotaDebitoMotivoInline(admin.TabularInline):
     extra = 1
 
 
-@admin.register(documentos.NotaDebito)
+@registrar(documentos.NotaDebito)
 class NotaDebitoAdmin(DocumentoAdmin):
     """Notas de débito."""
 
@@ -632,13 +696,15 @@ class GuiaDestinatarioInline(admin.StackedInline):
     show_change_link = True
 
 
-@admin.register(documentos.GuiaRemision)
+@registrar(documentos.GuiaRemision)
 class GuiaRemisionAdmin(DocumentoAdmin):
     """Guías de remisión."""
 
     campo_total = None
-    list_select_related = ("comprobante",)
+    list_select_related = ("comprobante", "conductor", "vehiculo")
     filtros_propios = (
+        "conductor",
+        "vehiculo",
         "placa",
         "tipo_identificacion_transportista",
         filtro_por_fecha("fecha_ini_transporte", "Inicio del traslado"),
@@ -648,6 +714,10 @@ class GuiaRemisionAdmin(DocumentoAdmin):
         "ruc_transportista",
         "placa",
         "dir_partida",
+        "conductor__razon_social",
+        "conductor__identificacion",
+        "vehiculo__placa",
+        "vehiculo__descripcion",
         "destinatarios__razon_social",
         "destinatarios__identificacion",
     )
@@ -655,9 +725,13 @@ class GuiaRemisionAdmin(DocumentoAdmin):
     fieldsets = (
         ("Emisión", {"fields": ("fecha_emision", "secuencial", "observaciones")}),
         ("Traslado", {"fields": ("dir_partida", "fecha_ini_transporte", "fecha_fin_transporte")}),
-        ("Transportista", {
-            "fields": ("razon_social_transportista", "ruc_transportista",
-                       "tipo_identificacion_transportista", "placa", "rise"),
+        ("Transportista y vehículo", {
+            "fields": ("conductor", "vehiculo", "razon_social_transportista",
+                       "ruc_transportista", "tipo_identificacion_transportista",
+                       "placa", "rise"),
+            "description": "Elija el conductor y el vehículo del catálogo y sus datos se "
+                           "copian al bloque del SRI al guardar; si no los usa, escríbalos "
+                           "a mano en los campos de abajo.",
         }),
         ("Estado ante el SRI", {"fields": ("estado_mostrado", "clave_acceso_mostrada", "comprobante")}),
         ("Campos adicionales", {
@@ -684,7 +758,7 @@ class GuiaDetalleInline(admin.TabularInline):
               "datos_adicionales")
 
 
-@admin.register(documentos.GuiaDestinatario)
+@registrar(documentos.GuiaDestinatario)
 class GuiaDestinatarioAdmin(AdminConAjustes):
     """Destinatarios de las guías, con los bienes que se transportan."""
 
@@ -734,7 +808,7 @@ class RetencionDocSustentoInline(admin.StackedInline):
     show_change_link = True
 
 
-@admin.register(documentos.Retencion)
+@registrar(documentos.Retencion)
 class RetencionAdmin(DocumentoAdmin):
     """Comprobantes de retención."""
 
@@ -785,7 +859,7 @@ class RetencionImpuestoInline(admin.TabularInline):
     extra = 1
 
 
-@admin.register(documentos.RetencionDocSustento)
+@registrar(documentos.RetencionDocSustento)
 class RetencionDocSustentoAdmin(AdminConAjustes):
     """Documentos que sustentan cada retención, con sus impuestos y retenciones."""
 
@@ -940,7 +1014,7 @@ def _admin_de_linea(nombre: str, modelo: Any, campo_documento: str, contraparte:
             "__module__": __name__,
         },
     )
-    admin.site.register(modelo, clase)
+    registrar(modelo)(clase)
 
 
 _admin_de_linea("FacturaDetalleAdmin", documentos.FacturaDetalle, "factura", "factura__receptor")
@@ -954,7 +1028,7 @@ _admin_de_linea(
 )
 
 
-@admin.register(documentos.GuiaDetalle)
+@registrar(documentos.GuiaDetalle)
 class GuiaDetalleAdmin(AdminConAjustes):
     """Bienes transportados en las guías."""
 
@@ -971,7 +1045,7 @@ class GuiaDetalleAdmin(AdminConAjustes):
     ordering = ("destinatario", "pk")
 
 
-@admin.register(documentos.NotaDebitoMotivo)
+@registrar(documentos.NotaDebitoMotivo)
 class NotaDebitoMotivoAdmin(AdminConAjustes):
     """Motivos de las notas de débito."""
 
@@ -987,7 +1061,7 @@ class NotaDebitoMotivoAdmin(AdminConAjustes):
     ordering = ("nota_debito", "pk")
 
 
-@admin.register(documentos.RetencionImpuesto)
+@registrar(documentos.RetencionImpuesto)
 class RetencionImpuestoAdmin(AdminConAjustes):
     """Impuestos retenidos (renta, IVA, ISD…) de cada documento sustento."""
 
@@ -1007,7 +1081,7 @@ class RetencionImpuestoAdmin(AdminConAjustes):
     ordering = ("-pk",)
 
 
-@admin.register(documentos.RetencionDocSustentoImpuesto)
+@registrar(documentos.RetencionDocSustentoImpuesto)
 class RetencionDocSustentoImpuestoAdmin(AdminConAjustes):
     """Impuestos del documento sustento (base para calcular la retención)."""
 

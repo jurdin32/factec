@@ -121,8 +121,9 @@ Admin: <http://127.0.0.1:8000/admin/> → **Facturación electrónica (SRI)**
    el régimen y las obligaciones se traen solos del catastro del SRI. Adjunte el
    **archivo de firma (.p12)** y su **contraseña** (se guarda cifrada).
 2. **Catálogos** → cree sus **Productos o servicios** (tipo, código, precio, IVA y,
-   si quiere, sus **detalles adicionales**) y sus **Clientes** (o use
-   `CONSUMIDOR FINAL` para probar).
+   si quiere, sus **detalles adicionales**), sus **Clientes** (o use
+   `CONSUMIDOR FINAL` para probar) y, si emite guías de remisión, sus
+   **transportistas/choferes** y sus **vehículos**.
 3. **Comprobantes** → cree una **factura**, añada líneas *eligiendo el producto o
    servicio* (la descripción, el precio, el IVA, la unidad y sus detalles
    adicionales se completan solos) y pulse

@@ -19,6 +19,7 @@ from .admin_filtros import (
     filtro_por_fecha,
     filtro_por_importe,
 )
+from .admin_registro import registrar
 from .admin_documentos import *  # noqa: F401,F403  (registra los comprobantes)
 from .forms import ConfiguracionEmisorForm
 
@@ -27,7 +28,7 @@ __all__ = ["ConfiguracionEmisorAdmin", "ComprobanteEmitidoAdmin", "SecuencialAdm
 logger = logging.getLogger(__name__)
 
 
-@admin.register(models.ConfiguracionEmisor)
+@registrar(models.ConfiguracionEmisor)
 class ConfiguracionEmisorAdmin(AdminConAjustes):
     """Datos del contribuyente y carga del archivo de firma.
 
@@ -255,7 +256,7 @@ class ConfiguracionEmisorAdmin(AdminConAjustes):
         conf.limpiar_cache()
 
 
-@admin.register(models.ComprobanteEmitido)
+@registrar(models.ComprobanteEmitido)
 class ComprobanteEmitidoAdmin(AdminConAjustes):
     """Listado y detalle de los comprobantes emitidos."""
 
@@ -599,7 +600,7 @@ def _avisar_de_la_firma(admin_: Any, request: Any) -> None:
         admin_.message_user(request, aviso, level=messages.WARNING)
 
 
-@admin.register(models.Secuencial)
+@registrar(models.Secuencial)
 class SecuencialAdmin(AdminConAjustes):
     """Contadores de secuenciales por tipo, establecimiento y ambiente."""
 

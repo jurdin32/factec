@@ -30,6 +30,8 @@ Código                     ``codigo_principal``, ``codigo``, ``codigo_interno``
 IVA                        ``codigo_porcentaje_iva``, ``codigo_porcentaje``, ``impuesto``
 Forma de pago              ``pagos``, ``forma_pago``, ``formas_pago``
 Observaciones              ``observaciones``, ``notas``, ``info_adicional``
+Transportista (guía)       ``transportista``, ``conductor``, ``razon_social_transportista``
+Placa (guía)               ``vehiculo``, ``placa``, ``matricula``
 =========================  ======================================================
 
 Del receptor busca ``razon_social``/``nombre``, ``identificacion``/``ruc``/
@@ -958,21 +960,50 @@ class AdaptadorGuiaRemision(AdaptadorComprobante):
             ),
         )
 
+    def transportista(self, obj: Any) -> Dict[str, Any]:
+        """Datos del bloque ``transportista`` del SRI.
+
+        Se toman del objeto relacionado (``transportista`` o ``conductor``) si lo
+        hay; si no, de los campos sueltos del propio objeto.
+        """
+        relacionado = _obtener(obj, ("transportista", "conductor"))
+        if relacionado is not None and not isinstance(relacionado, str):
+            return {
+                "razon_social": str(_obtener(relacionado, NOMBRES_RAZON_SOCIAL, "") or ""),
+                "ruc": str(_obtener(relacionado, NOMBRES_IDENTIFICACION, "") or ""),
+                "tipo_identificacion": _obtener(
+                    relacionado, NOMBRES_TIPO_ID, TipoIdentificacion.RUC
+                ),
+            }
+        return {
+            "razon_social": str(
+                _obtener(obj, ("razon_social_transportista", "transportista"), "") or ""
+            ),
+            "ruc": str(_obtener(obj, ("ruc_transportista", "ruc_transporte"), "") or ""),
+            "tipo_identificacion": _obtener(
+                obj, ("tipo_identificacion_transportista",), TipoIdentificacion.RUC
+            ),
+        }
+
+    def placa(self, obj: Any) -> str:
+        """La placa: del vehículo relacionado (``vehiculo``) o del campo suelto."""
+        vehiculo = _obtener(obj, ("vehiculo",))
+        if vehiculo is not None and not isinstance(vehiculo, str):
+            return str(_obtener(vehiculo, ("placa", "matricula"), "") or "")
+        return str(_obtener(obj, ("placa", "vehiculo", "matricula"), "") or "")
+
     def parametros(self, obj: Any) -> Dict[str, Any]:
         destinatarios = self.destinatarios(obj)
         if not destinatarios:
             raise ErrorValidacion("La guía de remisión requiere al menos un destinatario.")
+        transportista = self.transportista(obj)
         return {
             "destinatarios": destinatarios,
             "dir_partida": str(_obtener(obj, ("dir_partida", "direccion_partida", "origen"), "") or ""),
-            "razon_social_transportista": str(
-                _obtener(obj, ("razon_social_transportista", "transportista"), "") or ""
-            ),
-            "ruc_transportista": str(_obtener(obj, ("ruc_transportista", "ruc_transporte"), "") or ""),
-            "tipo_identificacion_transportista": _obtener(
-                obj, ("tipo_identificacion_transportista",), TipoIdentificacion.RUC
-            ),
-            "placa": str(_obtener(obj, ("placa", "vehiculo", "matricula"), "") or ""),
+            "razon_social_transportista": transportista["razon_social"],
+            "ruc_transportista": transportista["ruc"],
+            "tipo_identificacion_transportista": transportista["tipo_identificacion"],
+            "placa": self.placa(obj),
             "rise": _obtener(obj, ("rise", "numero_rise")),
             "fecha_ini_transporte": _fecha(_obtener(obj, ("fecha_ini_transporte", "fecha_inicio")))
             or self.fecha_emision(obj),

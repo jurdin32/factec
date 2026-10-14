@@ -6,7 +6,7 @@ mezclado. Aquí se reparten en secciones para poder leerlos y verificar el estad
 de un vistazo:
 
 * **Configuración del SRI** — datos del emisor, certificado y secuenciales.
-* **Catálogos** — clientes y productos.
+* **Catálogos** — clientes, productos y los del transporte (conductores y vehículos).
 * **Comprobantes** — los seis documentos del SRI, con sus detalles.
 * **Emisión** — lo que se envió al SRI: clave, estado, autorización y XML.
 
@@ -39,7 +39,7 @@ GRUPOS: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
     (
         "sri_fe_catalogos",
         "Catálogos",
-        ("Cliente", "Producto"),
+        ("Cliente", "Producto", "Conductor", "Vehiculo"),
     ),
     (
         "sri_fe_comprobantes",

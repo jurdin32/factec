@@ -41,6 +41,7 @@ Eso crea las tablas de la app (usa el *label* `sri_fe`):
 | `sri_fe_comprobanteemitido` | Cada comprobante con sus XML y el estado ante el SRI |
 | `sri_fe_secuencial` | Contador persistente de secuenciales |
 | `sri_fe_cliente`, `sri_fe_producto` | Catálogos de clientes y productos |
+| `sri_fe_conductor`, `sri_fe_vehiculo` | Catálogos de transportistas/choferes y de vehículos (guía de remisión) |
 | `sri_fe_factura`, `sri_fe_facturadetalle` | Facturas y sus líneas |
 | `sri_fe_liquidacioncompra`, `…detalle` | Liquidaciones de compra |
 | `sri_fe_notacredito`, `sri_fe_notacreditodetalle` | Notas de crédito |
@@ -155,7 +156,7 @@ producto = documentos.Producto.objects.create(
 | `LiquidacionCompra` | `03` | `proveedor`, `forma_pago`, `plazo`, `unidad_tiempo`, `correo` |
 | `NotaCredito` | `04` | `receptor`, `motivo`, `cod_doc_modificado`, `num_doc_modificado`, `fecha_emision_doc_sustento`, `rise` |
 | `NotaDebito` | `05` | `receptor`, `codigo_porcentaje_iva`, `base_imponible`, `forma_pago`, `cod_doc_modificado`, `num_doc_modificado` y sus `motivos` |
-| `GuiaRemision` | `06` | `dir_partida`, `razon_social_transportista`, `ruc_transportista`, `placa`, `fecha_ini_transporte`, `fecha_fin_transporte` y sus `destinatarios` |
+| `GuiaRemision` | `06` | `conductor`, `vehiculo`, `dir_partida`, `razon_social_transportista`, `ruc_transportista`, `placa`, `fecha_ini_transporte`, `fecha_fin_transporte` y sus `destinatarios` |
 | `Retencion` | `07` | `sujeto_retenido`, `periodo_fiscal`, `parte_rel`, `tipo_sujeto_retenido` y sus `docs_sustento` |
 
 Las líneas de factura, liquidación y nota de crédito (`FacturaDetalle`,
@@ -170,6 +171,33 @@ en la factura— que sirve para filtrar y buscar en el admin, y para proponer la
 unidad de medida (`UNIDAD_POR_TIPO`). Al elegir un producto en la línea, esta
 hereda todo lo que el producto tenga: descripción, códigos, unidad, precio, IVA y
 sus **detalles adicionales** (`Producto.datos_adicionales`).
+
+#### El transportista y el vehículo de la guía de remisión
+
+La guía de remisión usa dos catálogos más: `Conductor` (el transportista o chofer:
+nombre, identificación y tipo de identificación) y `Vehiculo` (la placa). Se dan
+de alta una vez y en la guía se eligen; los campos del SRI se copian solos al
+guardar:
+
+```python
+conductor = documentos.Conductor.objects.create(
+    razon_social="TRANSPORTES DEL NORTE CÍA. LTDA.",
+    identificacion="1790012345001",           # RUC o cédula
+    tipo_identificacion="04",                  # 04 RUC, 05 cédula…
+)
+vehiculo = documentos.Vehiculo.objects.create(placa="PBX-1234", descripcion="Camión")
+
+guia = documentos.GuiaRemision.objects.create(
+    fecha_emision=date(2026, 10, 8), dir_partida="QUITO",
+    conductor=conductor, vehiculo=vehiculo,     # de aquí salen los datos del SRI
+    fecha_ini_transporte=date(2026, 10, 8), fecha_fin_transporte=date(2026, 10, 8),
+)
+# guia.razon_social_transportista, guia.ruc_transportista y guia.placa ya están puestos.
+```
+
+Si no usa los catálogos, escriba a mano `razon_social_transportista`,
+`ruc_transportista`, `tipo_identificacion_transportista` y `placa` (la guía exige
+el transportista y la placa, de un modo u otro).
 
 #### Campos adicionales a la medida de la tienda
 
@@ -313,9 +341,15 @@ la facturación:
 | Sección | Contenido |
 |---|---|
 | **Configuración del SRI** | Configuración del emisor y secuenciales |
-| **Catálogos** | Clientes y productos |
+| **Catálogos** | Clientes, productos, transportistas/choferes y vehículos |
 | **Comprobantes** | Facturas, notas de crédito y débito, liquidaciones, guías de remisión, retenciones y sus detalles |
 | **Emisión** | Comprobantes emitidos: clave de acceso, estado, autorización y XML |
+
+El paquete registra sus modelos en el admin **solo si el proyecto no lo ha hecho ya**:
+si su proyecto (o cualquier otra app) registra uno de estos modelos —por ejemplo, los
+catálogos de conductores o vehículos junto a sus guías—, el suyo manda y no salta el
+error `AlreadyRegistered`. Así, añadir `factec.django` a un proyecto no choca con lo
+que ya tenga.
 
 Si el proyecto usa un ``AdminSite`` propio, hay que activar la agrupación a mano:
 
@@ -692,12 +726,14 @@ columnas y campos de solo lectura que indique.
 | Modelo | Filtros de serie | Búsqueda por |
 |---|---|---|
 | `Factura`, `LiquidacionCompra`, `NotaCredito`, `NotaDebito` | Estado ante el SRI, emitidos/sin emitir, ambiente, fecha de emisión, fecha de autorización, importe, forma de pago, tipo de identificación de la contraparte… | Serie y secuencial, clave de acceso, número de autorización, razón social e identificación, correo, dirección, motivo, número del documento modificado… |
-| `GuiaRemision` | Estado, fechas de emisión e inicio del traslado, placa, tipo de identificación del transportista | Transportista, placa, punto de partida, destinatarios |
+| `GuiaRemision` | Estado, fechas de emisión e inicio del traslado, placa, conductor, vehículo, tipo de identificación del transportista | Transportista, conductor, vehículo/placa, punto de partida, destinatarios |
 | `Retencion` | Estado, período fiscal, parte relacionada, tipo de sujeto retenido | Sujeto retenido, documentos sustento, códigos de retención |
 | `GuiaDestinatario` | Motivo de traslado, tipo de identificación, documento que sustenta, fecha del sustento | Destinatario, ruta, número y autorización del sustento, bienes |
 | `RetencionDocSustento` | Documento y código de sustento, pago local/exterior, convenio de doble tributación, rango de fechas e importes | Números de documento y autorización, sujeto retenido, retenciones e impuestos |
 | `Cliente` | Tipo de identificación, fecha de alta | Razón social, identificación, correo, teléfono, dirección |
 | `Producto` | **Producto o servicio**, activo, IVA, unidad de medida, fecha de alta | Código principal y auxiliar, descripción, unidad, detalles adicionales |
+| `Conductor` | Tipo de identificación, activo | Nombre, identificación, teléfono |
+| `Vehiculo` | Activo | Placa, descripción |
 | `ComprobanteEmitido` | Estado, tipo, ambiente, tipo de emisión, configuración, rangos de fechas e importes, **sin enviar de otro día** | Clave, autorización, receptor, secuencial, carpeta, mensajes y error |
 | `ConfiguracionEmisor` | Activo, ambiente, obligado a contabilidad, régimen, categoría, firma cargada, fecha de alta | RUC, razón social, direcciones, serie, certificado, resoluciones |
 | **Líneas** (`FacturaDetalle`, `LiquidacionCompraDetalle`, `NotaCreditoDetalle`, `GuiaDetalle`) | Fecha y estado del comprobante, IVA, importe, tipo de identificación de la contraparte | Descripción, códigos, datos adicionales, producto, cliente/proveedor, secuencial y clave del comprobante |

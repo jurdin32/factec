@@ -328,6 +328,33 @@ class TestOtrosTipos:
         assert comprobante.TIPO == TipoComprobante.GUIA_REMISION.value
         assert comprobante.destinatarios[0].detalles[0].descripcion == "Caja"
 
+    def test_guia_remision_con_los_catalogos(self):
+        """El transportista y la placa se toman de los objetos relacionados."""
+
+        class Conductor:
+            razon_social = "TRANSPORTES DEL NORTE CÍA. LTDA."
+            identificacion = "1790012345001"
+            tipo_identificacion = "04"
+
+        class Vehiculo:
+            placa = "PBX-1234"
+            descripcion = "Camión Hino"
+
+        comprobante = _adapt(adaptadores.AdaptadorGuiaRemision).comprobante({
+            **BASE,
+            "destinatarios": [{
+                "razon_social": "DESTINO", "identificacion": "1790012345001",
+                "direccion": "GUAYAQUIL", "motivo_traslado": "01",
+            }],
+            "dir_partida": "QUITO", "conductor": Conductor(), "vehiculo": Vehiculo(),
+            "fecha_ini_transporte": FECHA, "fecha_fin_transporte": FECHA,
+            "detalles": [{"descripcion": "Caja", "cantidad": 1}],
+        })
+        assert comprobante.razon_social_transportista == "TRANSPORTES DEL NORTE CÍA. LTDA."
+        assert comprobante.ruc_transportista == "1790012345001"
+        assert comprobante.tipo_identificacion_transportista == "04"
+        assert comprobante.placa == "PBX-1234"
+
 
 class TestRegistro:
     def test_registra_y_recupera_un_adaptador(self, registro_limpio):

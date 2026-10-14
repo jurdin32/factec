@@ -999,26 +999,44 @@ class NotaDebitoMotivo(models.Model):
 
 
 class GuiaRemision(DocumentoElectronico):
-    """Guía de remisión (``codDoc`` 06): transporta bienes."""
+    """Guía de remisión (``codDoc`` 06): transporta bienes.
+
+    El transportista y el vehículo se eligen de sus catálogos (:class:`Conductor`
+    y :class:`Vehiculo`) y sus datos se copian solos al guardar; si no se usa el
+    catálogo, también se pueden escribir a mano en los campos del SRI.
+    """
 
     TIPO_COMPROBANTE: ClassVar[str] = TipoComprobante.GUIA_REMISION.value
 
     dir_partida = models.CharField(
         "dirección de partida", max_length=300, help_text="Desde dónde salen los bienes."
     )
+    conductor = models.ForeignKey(
+        Conductor, verbose_name="transportista / chofer", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="guias",
+        help_text="Quién traslada la mercadería: se copia al bloque del transportista.",
+    )
+    vehiculo = models.ForeignKey(
+        Vehiculo, verbose_name="vehículo", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="guias",
+        help_text="De aquí sale la placa del SRI.",
+    )
     razon_social_transportista = models.CharField(
-        "razón social del transportista", max_length=300
+        "razón social del transportista", max_length=300, blank=True,
+        help_text="Se copia del transportista elegido; o escríbala a mano.",
     )
     ruc_transportista = models.CharField(
-        "RUC del transportista", max_length=13,
-        validators=[RegexValidator(r"^\d{13}$", "El RUC debe tener 13 dígitos.")],
+        "RUC del transportista", max_length=13, blank=True,
         help_text="El del transportista; si transporta usted mismo, su propio RUC.",
     )
     tipo_identificacion_transportista = models.CharField(
         "tipo de identificación del transportista", max_length=2,
         choices=OPCIONES_TIPO_IDENTIFICACION, default=IDENTIFICACION_POR_OMISION,
     )
-    placa = models.CharField("placa", max_length=20)
+    placa = models.CharField(
+        "placa", max_length=20, blank=True,
+        help_text="Se copia del vehículo elegido; o escríbala a mano.",
+    )
     fecha_ini_transporte = models.DateField("inicio del transporte")
     fecha_fin_transporte = models.DateField("fin del transporte")
     rise = models.CharField("RISE", max_length=40, blank=True)
@@ -1038,6 +1056,35 @@ class GuiaRemision(DocumentoElectronico):
             raise ValidationError(
                 {"fecha_fin_transporte": "No puede ser anterior al inicio del transporte."}
             )
+        if not self.razon_social_transportista and not self.conductor_id:
+            raise ValidationError(
+                {"razon_social_transportista": "Indique el transportista o elija un "
+                                               "conductor del catálogo."}
+            )
+        ruc = _solo_digitos(self.ruc_transportista)
+        if ruc and len(ruc) != 13:
+            raise ValidationError(
+                {"ruc_transportista": "El RUC del transportista debe tener 13 dígitos."}
+            )
+        if not self.placa and not self.vehiculo_id:
+            raise ValidationError(
+                {"placa": "Indique la placa o elija un vehículo del catálogo."}
+            )
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        self._completar_desde_los_catalogos()
+        super().save(*args, **kwargs)
+
+    def _completar_desde_los_catalogos(self) -> None:
+        """Copia al bloque del SRI los datos del conductor y del vehículo elegidos."""
+        if self.conductor_id:
+            conductor = self.conductor
+            self.razon_social_transportista = conductor.razon_social
+            self.ruc_transportista = conductor.identificacion
+            if conductor.tipo_identificacion:
+                self.tipo_identificacion_transportista = conductor.tipo_identificacion
+        if self.vehiculo_id:
+            self.placa = self.vehiculo.placa
 
 
 class GuiaDestinatario(models.Model):

@@ -26,6 +26,8 @@ HOY = date(2026, 10, 8)
 TABLAS = (
     "sri_fe_cliente",
     "sri_fe_producto",
+    "sri_fe_conductor",
+    "sri_fe_vehiculo",
     "sri_fe_factura",
     "sri_fe_facturadetalle",
     "sri_fe_liquidacioncompra",
@@ -63,6 +65,8 @@ def documentos(entorno_django):
         mod.Factura.objects.all().delete()
         mod.Producto.objects.all().delete()
         mod.Cliente.objects.all().delete()
+        mod.Conductor.objects.all().delete()
+        mod.Vehiculo.objects.all().delete()
 
     vaciar()
     yield mod
@@ -98,6 +102,23 @@ def producto(documentos):
         precio_unitario=Decimal("100"),
         codigo_porcentaje_iva="4",
     )
+
+
+@pytest.fixture
+def conductor(documentos):
+    """Transportista / chofer que se elige en la guía."""
+    return documentos.Conductor.objects.create(
+        razon_social="TRANSPORTES DEL NORTE CÍA. LTDA.",
+        identificacion="1790012345001",
+        tipo_identificacion="04",
+        telefono="0999999999",
+    )
+
+
+@pytest.fixture
+def vehiculo(documentos):
+    """Vehículo del que sale la placa de la guía."""
+    return documentos.Vehiculo.objects.create(placa="PBX-1234", descripcion="Camión Hino")
 
 
 @pytest.fixture
@@ -388,6 +409,51 @@ def test_guia_valida_las_fechas(documentos):
         guia.full_clean()
 
 
+def test_la_guia_toma_los_datos_de_los_catalogos(
+    documentos, configuracion, conductor, vehiculo, cliente_falso, esquemas
+):
+    """Al elegir conductor y vehículo, el bloque del SRI se completa solo."""
+    guia = documentos.GuiaRemision.objects.create(
+        fecha_emision=HOY, dir_partida="PANAMERICANA Y CARCHI",
+        conductor=conductor, vehiculo=vehiculo,
+        fecha_ini_transporte=HOY, fecha_fin_transporte=HOY,
+    )
+    assert guia.razon_social_transportista == conductor.razon_social
+    assert guia.ruc_transportista == conductor.identificacion
+    assert guia.tipo_identificacion_transportista == conductor.tipo_identificacion
+    assert guia.placa == vehiculo.placa
+
+    # Si se cambia el transportista del catálogo, sus datos vuelven a mandar.
+    otro = documentos.Conductor.objects.create(
+        razon_social="OTRO TRANSPORTISTA CÍA. LTDA.", identificacion="1790012345999",
+    )
+    guia.conductor = otro
+    guia.save()
+    assert guia.razon_social_transportista == "OTRO TRANSPORTISTA CÍA. LTDA."
+    assert guia.ruc_transportista == "1790012345999"
+
+    destinatario = guia.destinatarios.create(
+        razon_social="CLIENTE DE PRUEBA", identificacion="1790012345001",
+        tipo_identificacion="04", direccion="AV. AMAZONAS 123, QUITO", motivo_traslado="01",
+    )
+    destinatario.detalles.create(descripcion="Mercadería", cantidad=1, codigo_principal="SRV001")
+
+    registro = guia.emitir(encolar=False)
+    assert registro.estado == "AUTORIZADO"
+    _valida(esquemas, "GuiaRemision_V1.1.0.xsd", registro.xml_sin_firma)
+
+
+def test_la_guia_exige_transportista_y_placa(documentos):
+    from django.core.exceptions import ValidationError
+
+    guia = documentos.GuiaRemision(
+        fecha_emision=HOY, dir_partida="X",
+        fecha_ini_transporte=HOY, fecha_fin_transporte=HOY,
+    )
+    with pytest.raises(ValidationError):
+        guia.full_clean()
+
+
 # ----------------------------------------------------- comprobante de retención
 
 
@@ -449,6 +515,10 @@ def admin_cliente(entorno_django):
     [
         "/admin/sri_fe/cliente/",
         "/admin/sri_fe/producto/",
+        "/admin/sri_fe/conductor/",
+        "/admin/sri_fe/conductor/add/",
+        "/admin/sri_fe/vehiculo/",
+        "/admin/sri_fe/vehiculo/add/",
         "/admin/sri_fe/factura/",
         "/admin/sri_fe/factura/add/",
         "/admin/sri_fe/liquidacioncompra/",
@@ -468,6 +538,37 @@ def admin_cliente(entorno_django):
 def test_el_admin_responde(admin_cliente, ruta):
     """Las páginas de listado y de alta de los comprobantes responden."""
     assert admin_cliente.get(ruta).status_code == 200
+
+
+def test_el_admin_del_proyecto_manda_sobre_el_del_paquete(entorno_django):
+    """Si el proyecto registra un modelo del paquete, el paquete cede en vez de fallar.
+
+    Así, añadir la app a un proyecto que trae su propio admin (u otro paquete que
+    registre el mismo modelo) no revienta con ``AlreadyRegistered``.
+    """
+    from django.contrib import admin
+
+    from factec.django import admin_documentos, admin_registro
+    from factec.django import documentos as modelo
+
+    class MiConductorAdmin(admin.ModelAdmin):
+        pass
+
+    original = type(admin.site._registry[modelo.Conductor])
+    try:
+        admin.site.unregister(modelo.Conductor)
+        admin.site.register(modelo.Conductor, MiConductorAdmin)
+
+        # Lo que hace ``ready``: registra lo pendiente del paquete sin pisar lo del
+        # proyecto (si ya estaba registrado, se deja como está).
+        admin_registro.PENDIENTES.append((modelo.Conductor, admin_documentos.ConductorAdmin))
+        admin_registro.registrar_los_pendientes()
+
+        assert isinstance(admin.site._registry[modelo.Conductor], MiConductorAdmin)
+        assert admin_registro.PENDIENTES == []
+    finally:
+        admin.site.unregister(modelo.Conductor)
+        admin.site.register(modelo.Conductor, original)
 
 
 def test_el_admin_muestra_la_factura_con_sus_lineas(admin_cliente, factura):
@@ -1705,6 +1806,8 @@ def test_los_filtros_y_busquedas_apuntan_a_campos_que_existen(entorno_django):
     [
         "/admin/sri_fe/cliente/",
         "/admin/sri_fe/producto/",
+        "/admin/sri_fe/conductor/",
+        "/admin/sri_fe/vehiculo/",
         "/admin/sri_fe/factura/",
         "/admin/sri_fe/liquidacioncompra/",
         "/admin/sri_fe/notacredito/",
