@@ -130,6 +130,11 @@ La app trae los modelos con **los campos exactos del SRI**: los mismos nombres,
 las mismas longitudes del esquema oficial y los catálogos (tablas 1, 2, 5, 16, 21
 y 24). Sirven tanto desde el admin como desde Python.
 
+Los trae **todos el paquete** —los seis comprobantes con sus líneas, los catálogos
+(clientes, productos, conductores y vehículos), la configuración del emisor, los
+secuenciales y los comprobantes emitidos— y los registra **todos** en el admin: al
+añadir la app a un proyecto no queda ningún modelo sin administrar.
+
 ```python
 from factec.django import documentos
 
@@ -198,6 +203,55 @@ guia = documentos.GuiaRemision.objects.create(
 Si no usa los catálogos, escriba a mano `razon_social_transportista`,
 `ruc_transportista`, `tipo_identificacion_transportista` y `placa` (la guía exige
 el transportista y la placa, de un modo u otro).
+
+#### Añadir campos a un modelo del paquete
+
+Si necesita campos que el SRI no pide —una marca al producto, una sucursal a la
+factura, el chofer a la guía—, **herede del modelo del paquete** en su aplicación:
+Django crea una tabla hija con los campos nuevos, y el modelo sigue siendo el del
+paquete para todo lo demás.
+
+```python
+# mi_app/models.py
+from django.db import models
+
+from factec.django import documentos
+
+
+class ProductoExtendido(documentos.Producto):
+    marca = models.CharField("marca", max_length=60, blank=True)
+
+
+class FacturaExtendida(documentos.Factura):
+    sucursal = models.CharField("sucursal", max_length=40, blank=True)
+```
+
+```bash
+python manage.py makemigrations mi_app
+python manage.py migrate
+```
+
+El paquete lo emite igual. El adaptador se elige por el **tipo** del comprobante
+—no por la clase exacta—, así que una `FacturaExtendida` no se emite como si fuera
+otra cosa, y el XML sigue validando contra el esquema oficial del SRI. Para el
+admin, herede del del paquete y registre el suyo; los dos conviven sin chocar:
+
+```python
+from django.contrib import admin
+
+from factec.django.admin_documentos import FacturaAdmin
+
+
+@admin.register(FacturaExtendida)
+class FacturaExtendidaAdmin(FacturaAdmin):
+    list_display = ("numero", "fecha_emision", "sucursal", "estado_badge")
+```
+
+Como el modelo extendido sigue siendo el del paquete (una `FacturaExtendida` *es*
+una `Factura`), sirve en todo lo que espere uno: se le añaden líneas, se le pone un
+`receptor` del catálogo y se emite con `emitir()` como siempre. Si prefiere no
+heredar, use su propio modelo y regístrele un adaptador (ver «Emitir a partir de su
+propio modelo»).
 
 #### Campos adicionales a la medida de la tienda
 
@@ -350,6 +404,11 @@ si su proyecto (o cualquier otra app) registra uno de estos modelos —por ejemp
 catálogos de conductores o vehículos junto a sus guías—, el suyo manda y no salta el
 error `AlreadyRegistered`. Así, añadir `factec.django` a un proyecto no choca con lo
 que ya tenga.
+
+Eso también es la vía para **cambiar el admin** de un modelo: registre el suyo
+(heredando del del paquete, si quiere mantener lo que trae) y mandará el suyo. Para
+**añadir campos** a un modelo, herede de él (ver «Añadir campos a un modelo del
+paquete»).
 
 Si el proyecto usa un ``AdminSite`` propio, hay que activar la agrupación a mano:
 

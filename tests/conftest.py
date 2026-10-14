@@ -208,6 +208,9 @@ def _configurar_django() -> None:
             "django.contrib.sessions",
             "django.contrib.admin",
             "factec.django",
+            # Un proyecto de mentira que hereda de los modelos del paquete para
+            # añadir campos (ver tests/test_extension.py).
+            "apps_de_extension",
         ],
         DATABASES={
             "default": {

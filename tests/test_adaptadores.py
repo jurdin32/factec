@@ -370,6 +370,22 @@ class TestRegistro:
     def test_por_defecto_factura(self, registro_limpio):
         assert adaptadores.obtener(int) is adaptadores.AdaptadorFactura
 
+    def test_un_comprobante_ampliado_usa_su_adaptador(self, registro_limpio):
+        """Ampliar un modelo del paquete con una subclase no lo emite como factura.
+
+        Es el caso de un proyecto que añade campos a un comprobante heredando de él:
+        la clase no está en el registro (su ruta es otra), pero declara su tipo, así
+        que se emite con el adaptador que le toca.
+        """
+        class MiGuia:
+            TIPO_COMPROBANTE = TipoComprobante.GUIA_REMISION.value
+
+            class _meta:  # imita un modelo de Django de otra app
+                app_label = "ventas"
+                object_name = "MiGuia"
+
+        assert adaptadores.obtener(MiGuia) is adaptadores.AdaptadorGuiaRemision
+
     def test_por_tipo_de_comprobante(self):
         assert adaptadores.obtener(int, TipoComprobante.NOTA_CREDITO.value) is (
             adaptadores.AdaptadorNotaCredito

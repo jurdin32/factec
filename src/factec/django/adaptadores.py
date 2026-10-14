@@ -1053,6 +1053,11 @@ class Adaptadores:
             return self._por_clase[modelo]
         if tipo and tipo in self._por_tipo:
             return self._por_tipo[tipo]
+        # Un modelo que hereda de uno del paquete (para añadirle campos) declara su
+        # propio tipo: se emite con el adaptador que le toca y no como una factura.
+        propio = getattr(modelo, "TIPO_COMPROBANTE", None)
+        if propio and propio in self._por_tipo:
+            return self._por_tipo[propio]
         return AdaptadorFactura
 
     def sabe_de(self, modelo: Any) -> bool:

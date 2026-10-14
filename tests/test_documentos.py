@@ -540,6 +540,29 @@ def test_el_admin_responde(admin_cliente, ruta):
     assert admin_cliente.get(ruta).status_code == 200
 
 
+def test_el_paquete_crea_y_registra_todos_sus_modelos(entorno_django):
+    """El paquete trae todos los modelos del proceso y los pone en el admin.
+
+    Es la garantía de que al añadir la app a un proyecto no falta ninguna tabla ni
+    ningún modelo sin administrar: catálogos, comprobantes, líneas y emisión.
+    """
+    from django.apps import apps
+    from django.contrib import admin
+
+    configuracion = apps.get_app_config("sri_fe")
+    # Los modelos de prueba (no gestionados) también cuelgan de la app: no cuentan.
+    modelos = [
+        modelo for modelo in configuracion.get_models()
+        if getattr(modelo._meta, "managed", True) is not False
+    ]
+    sin_registrar = [
+        modelo.__name__ for modelo in modelos if not admin.site.is_registered(modelo)
+    ]
+
+    assert len(modelos) >= 20, f"faltan modelos del proceso: solo hay {len(modelos)}"
+    assert not sin_registrar, f"modelos sin registrar en el admin: {sin_registrar}"
+
+
 def test_el_admin_del_proyecto_manda_sobre_el_del_paquete(entorno_django):
     """Si el proyecto registra un modelo del paquete, el paquete cede en vez de fallar.
 
