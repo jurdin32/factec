@@ -152,13 +152,22 @@ class TarifaIva(_EnumCodigo):
 
 
 class TarifaRetencionIva(_EnumCodigo):
-    """Código de porcentaje de retención de IVA (SRI, tabla 20)."""
+    """Código de porcentaje de retención de IVA (SRI, tabla 20).
 
-    RETENCION_10 = "1"
-    RETENCION_20 = "2"
-    RETENCION_30 = "3"
-    RETENCION_70 = "4"
-    RETENCION_100 = "5"
+    Son los que van en ``codigoRetencion`` del comprobante de retención y no siguen
+    el orden del porcentaje: el 9 es el 10 %, el 10 el 20 %, el 1 el 30 %… Se leen de
+    aquí y no se adivinan. Comprobados uno por uno contra el servicio de autorización
+    del SRI.
+    """
+
+    RETENCION_10 = "9"
+    RETENCION_20 = "10"
+    RETENCION_30 = "1"
+    RETENCION_50 = "11"
+    RETENCION_70 = "2"
+    RETENCION_100 = "3"
+    RETENCION_CERO = "7"
+    NO_PROCEDE = "8"
 
 
 class MotivoTraslado(_EnumCodigo):
@@ -350,8 +359,11 @@ PORCENTAJE_RETENCION_IVA: Dict[str, Decimal] = {
     TarifaRetencionIva.RETENCION_10.value: Decimal("10.00"),
     TarifaRetencionIva.RETENCION_20.value: Decimal("20.00"),
     TarifaRetencionIva.RETENCION_30.value: Decimal("30.00"),
+    TarifaRetencionIva.RETENCION_50.value: Decimal("50.00"),
     TarifaRetencionIva.RETENCION_70.value: Decimal("70.00"),
     TarifaRetencionIva.RETENCION_100.value: Decimal("100.00"),
+    TarifaRetencionIva.RETENCION_CERO.value: Decimal("0.00"),
+    TarifaRetencionIva.NO_PROCEDE.value: Decimal("0.00"),
 }
 
 #: ``(codDoc, version)`` que corresponde a cada tipo de comprobante.

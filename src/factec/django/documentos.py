@@ -1357,7 +1357,7 @@ class RetencionImpuesto(models.Model):
     )
     codigo_retencion = models.CharField(
         "código de retención", max_length=5,
-        help_text="Tabla 17 (renta) o 20 (IVA) del SRI: 312, 725, 9…",
+        help_text="Tabla 17 (renta) o 20 (IVA) del SRI: 312, 9, 4580…",
     )
     base_imponible = models.DecimalField(
         "base imponible", max_digits=14, decimal_places=2, default=0,
