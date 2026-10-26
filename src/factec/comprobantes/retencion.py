@@ -207,6 +207,9 @@ class ComprobanteRetencion(Comprobante):
     docs_sustento: List[DocSustento] = field(default_factory=list)
     periodo_fiscal: date = field(default_factory=date.today)
     parte_rel: str = "SI"
+    #: ``01`` contribuyente / ``02`` no contribuyente. El SRI solo lo admite cuando la
+    #: identificación del sujeto retenido es del exterior (``08``); con RUC, cédula o
+    #: pasaporte lo devuelve por «error en diferencias», así que se omite del XML.
     tipo_sujeto_retenido: Optional[str] = None
     direccion_establecimiento: Optional[str] = None
     obligado_contabilidad: Optional[bool] = None
@@ -240,10 +243,13 @@ class ComprobanteRetencion(Comprobante):
             else self.obligado_contabilidad
         )
         agregar_texto(info, "obligadoContabilidad", "SI" if obligado else "NO")
-        agregar_texto(
-            info, "tipoIdentificacionSujetoRetenido", _tipo_identificacion(self.sujeto_retenido)
-        )
-        if self.tipo_sujeto_retenido is not None:
+        tipo_identificacion = _tipo_identificacion(self.sujeto_retenido)
+        agregar_texto(info, "tipoIdentificacionSujetoRetenido", tipo_identificacion)
+        # El SRI solo admite el tipo de sujeto retenido cuando la identificación es del
+        # exterior (08). Con RUC, cédula o pasaporte lo devuelve como «ERROR EN
+        # DIFERENCIAS»: «Si el tipo de identificación no corresponde a identificación del
+        # exterior, no se debe especificar el tipo de Sujeto Retenido».
+        if self.tipo_sujeto_retenido is not None and tipo_identificacion == "08":
             agregar_texto(
                 info, "tipoSujetoRetenido", codigo_documento(self.tipo_sujeto_retenido)
             )

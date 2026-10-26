@@ -19,13 +19,14 @@ from factec.comprobantes.liquidacion_compra import LiquidacionCompra
 from factec.comprobantes.nota_credito import NotaCredito
 from factec.comprobantes.nota_debito import NotaDebito
 from factec.comprobantes.retencion import ComprobanteRetencion
-from factec.catalogos import MotivoTraslado, TarifaIva, TipoComprobante
+from factec.catalogos import MotivoTraslado, TarifaIva, TipoComprobante, TipoIdentificacion
 from factec.modelos import (
     Destinatario,
     Detalle,
     DetalleGuia,
     Impuesto,
     Motivo,
+    Receptor,
 )
 
 FECHA = date(2026, 10, 8)
@@ -116,6 +117,42 @@ def test_orden_de_secciones_factura(comprobantes):
 def test_orden_de_secciones_retencion(comprobantes):
     raiz = etree.fromstring(comprobantes["retencion"].to_xml().encode("utf-8"))
     assert [h.tag for h in raiz] == ["infoTributaria", "infoCompRetencion", "docsSustento"]
+
+
+def test_el_tipo_de_sujeto_retenido_no_va_con_ruc(emisor, receptor, doc_sustento):
+    """Con RUC el SRI no lo admite: lo devuelve por «error en diferencias».
+
+    «Si el tipo de identificación no corresponde a identificación del exterior, no
+    se debe especificar el tipo de Sujeto Retenido».
+    """
+    retencion = ComprobanteRetencion(
+        emisor=emisor, sujeto_retenido=receptor, docs_sustento=[doc_sustento],
+        periodo_fiscal=date(2026, 9, 1), secuencial="5", fecha_emision=FECHA,
+        tipo_sujeto_retenido="01",
+    )
+    raiz = etree.fromstring(retencion.to_xml().encode("utf-8"))
+
+    assert raiz.findtext("infoCompRetencion/tipoIdentificacionSujetoRetenido") == "04"
+    assert raiz.find("infoCompRetencion/tipoSujetoRetenido") is None
+
+
+def test_el_tipo_de_sujeto_retenido_va_con_identificacion_del_exterior(
+    emisor, receptor, doc_sustento
+):
+    exterior = Receptor(
+        razon_social="CLIENTE DEL EXTERIOR",
+        identificacion="1234567890",
+        tipo_identificacion=TipoIdentificacion.IDENTIFICACION_EXTERIOR,
+    )
+    retencion = ComprobanteRetencion(
+        emisor=emisor, sujeto_retenido=exterior, docs_sustento=[doc_sustento],
+        periodo_fiscal=date(2026, 9, 1), secuencial="5", fecha_emision=FECHA,
+        tipo_sujeto_retenido="02",
+    )
+    raiz = etree.fromstring(retencion.to_xml().encode("utf-8"))
+
+    assert raiz.findtext("infoCompRetencion/tipoIdentificacionSujetoRetenido") == "08"
+    assert raiz.findtext("infoCompRetencion/tipoSujetoRetenido") == "02"
 
 
 def test_orden_de_secciones_guia(comprobantes):
