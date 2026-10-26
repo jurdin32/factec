@@ -66,6 +66,7 @@ __all__ = [
     "leer_ambiente",
     "PORCENTAJE_IVA",
     "PORCENTAJE_RETENCION_IVA",
+    "PORCENTAJE_RETENCION_ISD",
     "codigo_documento",
 ]
 
@@ -365,6 +366,9 @@ PORCENTAJE_RETENCION_IVA: Dict[str, Decimal] = {
     TarifaRetencionIva.RETENCION_CERO.value: Decimal("0.00"),
     TarifaRetencionIva.NO_PROCEDE.value: Decimal("0.00"),
 }
+
+#: Código de retención de ISD (SRI, tabla 21): el único que existe y su tarifa.
+PORCENTAJE_RETENCION_ISD: Dict[str, Decimal] = {"4580": Decimal("5.00")}
 
 #: ``(codDoc, version)`` que corresponde a cada tipo de comprobante.
 VERSIONES: Dict[str, str] = {

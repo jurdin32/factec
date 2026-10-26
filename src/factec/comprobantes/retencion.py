@@ -16,6 +16,7 @@ from typing import Any, ClassVar, List, Mapping, Optional, Tuple
 
 from ..catalogos import (
     ETIQUETA_RAIZ,
+    PORCENTAJE_RETENCION_ISD,
     PORCENTAJE_RETENCION_IVA,
     CodigoRetencion,
     TipoComprobante,
@@ -64,6 +65,19 @@ _TOTALES_REEMBOLSO: Tuple[Tuple[str, str], ...] = (
 _PATRON_PERIODO = re.compile(r"(0[1-9]|1[012])/20\d{2}")
 _PATRON_TIPO_IDENTIFICACION = re.compile(r"0[4-8]")
 
+#: Las tablas cortas del SRI, por impuesto: código de retención → porcentaje. La de
+#: renta no está: son más de cien códigos que cambian con cada resolución, y quien
+#: retiene los tiene por concepto.
+_TABLAS_DEL_SRI = {
+    CodigoRetencion.IVA.value: PORCENTAJE_RETENCION_IVA,
+    CodigoRetencion.ISD.value: PORCENTAJE_RETENCION_ISD,
+}
+
+
+def _porcentaje(valor: Any) -> str:
+    """Un porcentaje como se dice: 10, 1.75, 0 (sin ceros de relleno)."""
+    return format(Decimal(valor).normalize(), "f")
+
 
 def formatear_periodo_fiscal(valor: Any) -> str:
     """Formatea el periodo fiscal como ``MM/AAAA`` (formato que exige el SRI)."""
@@ -86,17 +100,18 @@ def calcular_valor_retenido(base_imponible: Any, porcentaje_retener: Any) -> Dec
 
 
 def _porcentaje_retenido(impuesto: ImpuestoRetencion) -> Decimal:
-    """Devuelve ``porcentajeRetener``: el informado o el del catálogo de IVA."""
+    """Devuelve ``porcentajeRetener``: el informado o el de la tabla del SRI."""
     if impuesto.porcentaje_retener is not None:
         return a_decimal(impuesto.porcentaje_retener)
     codigo = codigo_documento(impuesto.codigo)
-    if codigo == CodigoRetencion.IVA.value and impuesto.codigo_retencion is not None:
-        porcentaje = PORCENTAJE_RETENCION_IVA.get(codigo_documento(impuesto.codigo_retencion))
-        if porcentaje is not None:
-            return porcentaje
+    codigo_retencion = codigo_documento(impuesto.codigo_retencion)
+    tabla = _TABLAS_DEL_SRI.get(codigo) or {}
+    porcentaje = tabla.get(codigo_retencion)
+    if porcentaje is not None:
+        return porcentaje
     raise ErrorValidacion(
-        "Indique porcentajeRetener o use un codigoRetencion de IVA del catálogo "
-        f"(código de impuesto recibido: {codigo!r})."
+        f"Indique porcentajeRetener: el código de retención {codigo_retencion!r} no "
+        f"está en la tabla del impuesto {codigo!r}, así que no hay tarifa que deducir."
     )
 
 
@@ -432,4 +447,44 @@ class ComprobanteRetencion(Comprobante):
             if not doc.impuestos and not doc.retenciones:
                 raise ErrorValidacion(
                     f"El documento sustento {indice} debe tener impuestos o retenciones."
+                )
+            self._validar_retenciones(doc, indice)
+
+    @staticmethod
+    def _validar_retenciones(doc: DocSustento, indice: int) -> None:
+        """Revisa los códigos de retención de un documento sustento.
+
+        El SRI devuelve el comprobante entero —«ERROR EN DIFERENCIAS»— por un código
+        que no existe o por un porcentaje que no es el del código, así que se revisa
+        antes de firmar: más vale un error que se lee que uno que llega del SRI.
+        """
+        for fila, retencion in enumerate(doc.retenciones, start=1):
+            impuesto = codigo_documento(retencion.codigo)
+            codigo = codigo_documento(retencion.codigo_retencion)
+            if not codigo:
+                raise ErrorValidacion(
+                    f"La retención {fila} del documento sustento {indice} no tiene "
+                    "código de retención."
+                )
+            tabla = _TABLAS_DEL_SRI.get(impuesto)
+            if tabla is None:
+                continue  # la de renta es larga y cambia con cada resolución
+            esperado = tabla.get(codigo)
+            if esperado is None:
+                validos = ", ".join(
+                    f"{clave} ({_porcentaje(valor)} %)"
+                    for clave, valor in sorted(tabla.items(), key=lambda par: Decimal(par[0]))
+                )
+                raise ErrorValidacion(
+                    f"El código de retención {codigo!r} no existe para el impuesto "
+                    f"{impuesto!r} (documento sustento {indice}). Los del SRI son: {validos}."
+                )
+            if (
+                retencion.porcentaje_retener is not None
+                and a_decimal(retencion.porcentaje_retener) != esperado
+            ):
+                raise ErrorValidacion(
+                    f"El código {codigo!r} retiene el {_porcentaje(esperado)} % y se "
+                    f"pidió {retencion.porcentaje_retener} % "
+                    f"(documento sustento {indice})."
                 )
