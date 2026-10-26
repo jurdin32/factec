@@ -56,3 +56,10 @@ class FactecConfig(AppConfig):
         # Si se acaba de actualizar el paquete, se cuenta una vez (y solo con una
         # terminal detrás: no ensucia los registros del servidor).
         actualizacion.avisar_en_arranque()
+
+        # Los ajustes de la emisión viven en la base de datos, como los del resto
+        # de la aplicación: si el proyecto tiene `personalize_options` puesto, se
+        # declaran aquí y al migrar quedan sembrados (ver `factec.django.ajustes`).
+        from . import ajustes as ajustes_del_sri
+
+        ajustes_del_sri.declarar()

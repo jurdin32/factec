@@ -96,6 +96,13 @@ def ajustes() -> Dict[str, Any]:
     from django.conf import settings as django_settings
 
     configuracion = dict(AJUSTES_POR_DEFECTO)
+
+    # Lo que esté en la base de datos manda: es lo que se cambia desde la
+    # aplicación (ver ``factec.django.ajustes``).
+    from .ajustes import de_la_base
+
+    configuracion.update(de_la_base())
+
     propios = getattr(django_settings, "FACTURACION_ELECTRONICA", None) or {}
     if not isinstance(propios, dict):
         raise ImproperlyConfigured("settings.FACTURACION_ELECTRONICA debe ser un diccionario.")

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, List
 
 from django.core.checks import Error, Warning, register
+from django.db import OperationalError
 
 from ..excepciones import ErrorFacturacion
 from ..revision import DIAS_AVISO_CERTIFICADO, revisar_certificado
@@ -37,6 +38,24 @@ ID_ACTIVA = "sri_fe.E009"
 ID_VERSION = "sri_fe.W011"
 
 AYUDA_ADMIN = "Admin de Django → Facturación electrónica (SRI) → Configuraciones del emisor."
+
+
+def _faltan_tablas() -> bool:
+    """¿La base de datos todavía no tiene las tablas de los ajustes?"""
+    from django.db import connection
+
+    try:
+        return "personalize_options_ajuste" not in connection.introspection.table_names()
+    except Exception:  # noqa: BLE001 - si ni eso se puede preguntar, es que falta migrar
+        return True
+
+
+def _aviso_de_tablas() -> Any:
+    return Warning(
+        "La base de datos no está al día: faltan tablas por migrar.",
+        hint="Ejecute: python manage.py migrate --skip-checks",
+        id=ID_TABLAS,
+    )
 
 
 @register(ETIQUETA)
@@ -246,7 +265,17 @@ def _comprobar_certificado(activa: Any, problemas: List[Any]) -> None:
             )
         )
         return
+    except OperationalError:
+        problemas.append(_aviso_de_tablas())
+        return
     except Exception as exc:  # noqa: BLE001 - falta la clave de cifrado, etc.
+        if _faltan_tablas():
+            # La clave de cifrado vive en la base de datos (tabla de ajustes): si
+            # todavía no está migrada, esto no es un error de configuración sino
+            # que falta `migrate` — y sin este aviso no se podría migrar, porque
+            # `migrate` comprueba el sistema antes de empezar.
+            problemas.append(_aviso_de_tablas())
+            return
         problemas.append(
             Error(
                 f"No se pudo descifrar la contraseña del certificado de «{activa}»: {exc}",
