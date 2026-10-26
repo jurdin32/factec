@@ -5,7 +5,8 @@ tablas compartan prefijo, así que Django los mostraría en un único bloque
 mezclado. Aquí se reparten en secciones para poder leerlos y verificar el estado
 de un vistazo:
 
-* **Configuración del SRI** — datos del emisor, certificado y secuenciales.
+* **Configuración del SRI** — datos del emisor, certificado, **ajustes** y
+  secuenciales: todo lo que se configura, en el mismo sitio.
 * **Catálogos** — clientes, productos y los del transporte (conductores y vehículos).
 * **Comprobantes** — los seis documentos del SRI, con sus detalles.
 * **Emisión** — lo que se envió al SRI: clave, estado, autorización y XML.
@@ -34,7 +35,9 @@ GRUPOS: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
     (
         "sri_fe_configuracion",
         "Configuración del SRI",
-        ("ConfiguracionEmisor", "Secuencial"),
+        # Los ajustes del paquete van con lo demás que se configura del SRI, no
+        # aparte: son la misma tarea.
+        ("ConfiguracionEmisor", "AjusteDelSri", "Secuencial"),
     ),
     (
         "sri_fe_catalogos",
