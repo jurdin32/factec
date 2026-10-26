@@ -22,6 +22,17 @@ envía los seis comprobantes electrónicos que exige el Servicio de Rentas Inter
 
 ---
 
+## Novedades de la 1.11.8
+
+- El comprobante de retención **valida antes de firmar**: si el código de retención no
+  existe para ese impuesto, o el porcentaje no es el del código, el error sale al
+  instante con la lista de códigos válidos, en vez de volver del SRI.
+- El **ISD** se calcula con su tabla de porcentajes (`4580` → 5 %), igual que el IVA.
+- `PORCENTAJE_RETENCION_IVA` trae la tabla vigente del SRI (9, 10, 1, 11, 2, 3, 7, 8)
+  y `PORCENTAJE_RETENCION_ISD` la suya.
+- El `tipoSujetoRetenido` solo se escribe cuando la identificación es del exterior
+  (`08`), como pide el esquema del SRI.
+
 ## Instalación
 
 ```bash
@@ -228,13 +239,13 @@ actualizar.
 ╔═══════════════════════════════════════════════════════════════════════════╗
 ║ ↑  Hay una versión nueva de factec                                        ║
 ║                                                                           ║
-║ Instalada   1.10.1                                                        ║
-║ Disponible  1.11.0                                                        ║
+║ Instalada   1.11.0                                                        ║
+║ Disponible  1.11.8                                                        ║
 ║                                                                           ║
 ║ Para actualizar:                                                          ║
 ║   pip install -U "factec @ git+https://github.com/jurdin32/factec.git"    ║
 ║                                                                           ║
-║ Qué cambia: https://github.com/jurdin32/factec/compare/v1.10.1...v1.11.0 ║
+║ Qué cambia: https://github.com/jurdin32/factec/compare/v1.11.0...v1.11.8 ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
 ```
 
