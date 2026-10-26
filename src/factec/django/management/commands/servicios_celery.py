@@ -55,7 +55,7 @@ class Command(BaseCommand):
         parser.add_argument("--comandos", action="store_true",
                             help="Enseña los comandos de Celery de este proyecto, ya con sus nombres.")
         parser.add_argument("--plantillas", action="store_true",
-                            help="Copia los modelos de los servicios (.service y .env) para editarlos.")
+                            help="Copia los modelos de los servicios (.service) para editarlos.")
         parser.add_argument("--enlazar", action="store_true",
                             help="Deja las unidades en el proyecto y las enlaza desde ahí, sin copiarlas.")
         parser.add_argument("--reiniciar", action="store_true", help="Reinicia los servicios instalados.")

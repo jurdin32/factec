@@ -92,8 +92,8 @@ Acciones (una sola):
   --comandos         Enseña los comandos para este proyecto (con sus nombres)
   --reiniciar        Reinicia los servicios ya instalados
   --quitar           Para, deshabilita y borra las unidades
-  --plantillas       Copia los modelos .service (worker, beat y Flower) y el
-                     ejemplo de .env, para editarlos a mano
+  --plantillas       Copia los modelos .service (worker, beat y Flower), para
+                     editarlos a mano
 
 Opciones:
   --proyecto-dir DIR Carpeta del proyecto (por omisión, la actual)
@@ -333,7 +333,6 @@ WorkingDirectory=$PROYECTO_DIR
 Environment="DJANGO_SETTINGS_MODULE=$MODULO.settings"
 Environment="PYTHONUNBUFFERED=1"
 Environment="FORKED_BY_MULTIPROCESSING=1"
-EnvironmentFile=-$PROYECTO_DIR/.env
 $extra
 Restart=always
 RestartSec=5
@@ -569,7 +568,8 @@ reiniciar() {
 }
 
 plantillas() {
-  # Copia los modelos .service y el ejemplo de .env para editarlos a mano.
+  # Copia los modelos .service para editarlos a mano. No hay `.env`: la
+  # configuración de la aplicación vive en la base de datos.
   local destino="$DESTINO"
   [ "$destino" = "/etc/systemd/system" ] && destino="$PROYECTO_DIR/deploy/systemd"
   local origen="$DIR_SCRIPT/systemd"
@@ -584,7 +584,6 @@ plantillas() {
     for archivo in celery-worker celery-beat flower; do
       printf '    %s\n' "$NOMBRE-$archivo.service"
     done
-    printf '    %s\n' "env.ejemplo"
     aviso "Nada se ha tocado (--dry-run)."
     return 0
   fi
@@ -616,8 +615,7 @@ plantillas() {
   ok "Modelos copiados en $destino:"
   for archivo in "$destino/$NOMBRE-celery-worker.service" \
                  "$destino/$NOMBRE-celery-beat.service" \
-                 "$destino/$NOMBRE-flower.service" \
-                 "$destino/env.ejemplo"; do
+                 "$destino/$NOMBRE-flower.service"; do
     [ -f "$archivo" ] && printf '    %s\n' "$(basename "$archivo")"
   done
 
@@ -634,7 +632,6 @@ plantillas() {
   manda "sudo cp *.service /etc/systemd/system/"
   manda "sudo systemctl daemon-reload"
   manda "sudo systemctl enable --now $NOMBRE-celery-worker $NOMBRE-celery-beat $NOMBRE-flower"
-  manda "sudo cp env.ejemplo $PROYECTO_DIR/.env   # y complete los secretos"
   printf '\n%s\n' "Si prefiere no editar nada: sudo python manage.py servicios_celery ya los deja listos y arrancados."
 }
 

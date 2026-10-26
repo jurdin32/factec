@@ -2,19 +2,17 @@
 
 Orden de búsqueda:
 
-1. La ``ConfiguracionEmisor`` **activa** en la base de datos (lo normal: se
-   gestiona desde el admin).
-2. ``settings.FACTURACION_ELECTRONICA`` y las variables de entorno, como respaldo
-   para cuando la tabla aún no existe (por ejemplo, antes de ``migrate``) o para
-   despliegues sin acceso al admin.
+1. Los ajustes de la aplicación (tabla de ajustes del proyecto), que es lo que se
+   cambia desde la pantalla de configuración.
+2. ``settings.FACTURACION_ELECTRONICA``, como respaldo para proyectos que no
+   tengan puesto ``personalize_options`` o antes de ``migrate``.
 
-La clave de cifrado y la contraseña del certificado se leen siempre del entorno o
-de los ajustes, nunca en claro desde la base de datos.
+No se leen archivos ``.env`` ni variables de entorno: la configuración vive en la
+base de datos, así que el mismo código sirve en local y en producción.
 """
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from typing import Any, Dict, Optional
 
@@ -79,39 +77,26 @@ AJUSTES_POR_DEFECTO: Dict[str, Any] = {
     "ADMIN": {},
 }
 
-_VARIABLES_ENTORNO = {
-    "SRI_AMBIENTE": "AMBIENTE",
-    "SRI_CERTIFICADO": "CERTIFICADO",
-    "SRI_CLAVE_CERTIFICADO": "CLAVE_CERTIFICADO",
-    "SRI_CLAVE_CIFRADO": "CLAVE_CIFRADO",
-    "SRI_TIMEOUT": "TIMEOUT",
-    "SRI_ALGORITMO_FIRMA": "ALGORITMO_FIRMA",
-}
-
 PREFIJO_TAREAS_POR_DEFECTO = "sri_fe"
 
 
 def ajustes() -> Dict[str, Any]:
-    """Devuelve los ajustes resueltos (settings + variables de entorno)."""
+    """Devuelve los ajustes resueltos (base de datos + settings de respaldo)."""
     from django.conf import settings as django_settings
 
     configuracion = dict(AJUSTES_POR_DEFECTO)
 
-    # Lo que esté en la base de datos manda: es lo que se cambia desde la
-    # aplicación (ver ``factec.django.ajustes``).
-    from .ajustes import de_la_base
-
-    configuracion.update(de_la_base())
-
+    # El respaldo, para proyectos que no tengan la tabla o antes de migrar.
     propios = getattr(django_settings, "FACTURACION_ELECTRONICA", None) or {}
     if not isinstance(propios, dict):
         raise ImproperlyConfigured("settings.FACTURACION_ELECTRONICA debe ser un diccionario.")
     configuracion.update({k: v for k, v in propios.items() if v is not None})
 
-    for variable, clave in _VARIABLES_ENTORNO.items():
-        valor = os.environ.get(variable)
-        if valor not in (None, ""):
-            configuracion[clave] = valor
+    # Lo que esté en la base de datos manda: es lo que se cambia desde el admin
+    # (ver ``factec.django.ajustes``).
+    from .ajustes import de_la_base
+
+    configuracion.update(de_la_base())
 
     # «pruebas» y «producción» valen igual que 1 y 2.
     configuracion["AMBIENTE"] = leer_ambiente(configuracion["AMBIENTE"])
@@ -134,8 +119,8 @@ def clave_cifrado() -> str:
             "Falta la clave de cifrado de secretos. Genérela con:\n"
             '  python -c "from factec.django.crypto '
             'import generar_clave; print(generar_clave())"\n'
-            "y defínala en FACTURACION_ELECTRONICA['CLAVE_CIFRADO'] o en la variable "
-            "de entorno SRI_CLAVE_CIFRADO (recomendado)."
+            "y defínala en el ajuste sri_clave_cifrado (o en "
+            "FACTURACION_ELECTRONICA['CLAVE_CIFRADO'])."
         )
     return str(clave)
 
@@ -219,7 +204,8 @@ def clave_certificado() -> str:
 
     raise ImproperlyConfigured(
         "Falta la contraseña del certificado. Escríbala en la «configuración del "
-        "emisor» del admin o defina SRI_CLAVE_CERTIFICADO."
+        "emisor» del admin; la contraseña se guarda cifrada con el ajuste "
+        "sri_clave_cifrado."
     )
 
 

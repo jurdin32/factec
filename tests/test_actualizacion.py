@@ -14,6 +14,11 @@ import pytest
 
 from factec import actualizacion
 
+#: La que está instalada, sea cual sea, y una que siempre es más nueva: así estas
+#: pruebas no hay que tocarlas cada vez que sube la versión del paquete.
+INSTALADA = actualizacion.version_instalada()
+NUEVA = "99.0.0"
+
 
 class Respuesta:
     """Lo mínimo que ``comprobar`` le pide a la respuesta de GitHub."""
@@ -86,36 +91,36 @@ def test_la_version_se_lee_sin_la_v_de_la_etiqueta():
 
 
 def test_comprueba_y_lo_deja_anotado():
-    informe = actualizacion.comprobar(abrir=red("v1.10.1", "v1.12.0"))
+    informe = actualizacion.comprobar(abrir=red("v1.10.1", NUEVA))
 
-    assert informe.ultima == "1.12.0"
+    assert informe.ultima == NUEVA
     assert informe.hay_actualizacion
     assert informe.instalada == actualizacion.version_instalada()
     assert not informe.acaba_de_actualizarse
 
     guardado = actualizacion.leer()
-    assert guardado["ultima"] == "1.12.0"
+    assert guardado["ultima"] == NUEVA
     assert guardado["comprobado"]
     assert actualizacion.actualizacion_disponible()
 
 
 def test_lo_comprobado_evita_salir_a_la_red():
-    actualizacion.comprobar(abrir=red("1.12.0"))
+    actualizacion.comprobar(abrir=red(INSTALADA))
 
     # El ``abrir`` de esta llamada reventaría: no se le debe llamar.
     informe = actualizacion.comprobar(abrir=sin_red)
 
     assert informe.desde_guardado
-    assert informe.ultima == "1.12.0"
+    assert informe.ultima == INSTALADA
     assert informe.error == ""
 
 
 def test_forzar_vuelve_a_mirar():
-    actualizacion.comprobar(abrir=red("1.12.0"))
+    actualizacion.comprobar(abrir=red(INSTALADA))
 
-    informe = actualizacion.comprobar(forzar=True, abrir=red("v1.13.0"))
+    informe = actualizacion.comprobar(forzar=True, abrir=red(NUEVA))
 
-    assert informe.ultima == "1.13.0"
+    assert informe.ultima == NUEVA
     assert not informe.desde_guardado
 
 
@@ -131,18 +136,18 @@ def test_sin_internet_no_rompe_y_lo_dice():
 
 
 def test_sin_internet_conserva_lo_ultimo_que_se_sabia():
-    actualizacion.comprobar(abrir=red("1.12.0"))
+    actualizacion.comprobar(abrir=red(NUEVA))
     actualizacion.guardar(comprobado=(datetime.now(timezone.utc) - timedelta(days=3)).isoformat())
 
     informe = actualizacion.comprobar(abrir=sin_red)
 
-    assert informe.ultima == "1.12.0"        # lo de hace tres días sirve
+    assert informe.ultima == NUEVA        # lo de hace tres días sirve
     assert informe.hay_actualizacion
     assert "sin ruta al host" in informe.error
 
 
 def test_olvidar_borra_lo_guardado():
-    actualizacion.comprobar(abrir=red("1.12.0"))
+    actualizacion.comprobar(abrir=red(INSTALADA))
     assert actualizacion.leer()
 
     actualizacion.olvidar()
@@ -170,16 +175,16 @@ def test_esta_al_dia_cuando_lo_guardado_no_es_mas_nuevo():
 
 
 def test_el_recuadro_de_version_nueva_dice_como_actualizar():
-    informe = actualizacion.comprobar(abrir=red("1.12.0"))
+    informe = actualizacion.comprobar(abrir=red(NUEVA))
 
     texto = actualizacion.banner(informe)
 
     assert texto.startswith("╔") and texto.endswith("╝")
     assert "Hay una versión nueva de factec" in texto
     assert f"Instalada   {actualizacion.version_instalada()}" in texto
-    assert "Disponible  1.12.0" in texto
+    assert f"Disponible  {NUEVA}" in texto
     assert 'pip install -U "factec @ git+https://github.com/jurdin32/factec.git"' in texto
-    assert f"compare/v{actualizacion.version_instalada()}...v1.12.0" in texto
+    assert f"compare/v{actualizacion.version_instalada()}...v{NUEVA}" in texto
 
 
 def test_la_linea_de_al_dia():
@@ -194,17 +199,17 @@ def test_la_linea_de_al_dia():
 
 def test_el_recuadro_de_recien_actualizado():
     actualizacion.guardar(vista="1.0.0")
-    informe = actualizacion.comprobar(abrir=red("1.12.0"))
+    informe = actualizacion.comprobar(abrir=red(NUEVA))
 
     texto = actualizacion.banner(informe)
 
     assert informe.acaba_de_actualizarse
     assert f"✓  factec actualizado: 1.0.0 → {actualizacion.version_instalada()}" in texto
-    assert "Ya hay otra más nueva: 1.12.0" in texto
+    assert f"Ya hay otra más nueva: {NUEVA}" in texto
 
 
 def test_los_colores_solo_salen_en_una_terminal():
-    informe = actualizacion.comprobar(abrir=red("1.12.0"))
+    informe = actualizacion.comprobar(abrir=red(NUEVA))
 
     assert "\033[" not in actualizacion.banner(informe, color=False)
     assert "\033[" in actualizacion.banner(informe, color=True)
@@ -239,7 +244,7 @@ def test_el_aviso_a_mano_cuenta_cuando_no_se_pudo_comprobar():
 
 def test_el_aviso_automatico_avisa_cuando_hay_version_nueva():
     flujo = StringIO()
-    actualizacion.comprobar(abrir=red("1.12.0"))
+    actualizacion.comprobar(abrir=red(NUEVA))
 
     assert actualizacion.avisar(flujo=flujo, automatico=True) is True
     assert "Hay una versión nueva" in flujo.getvalue()
@@ -247,7 +252,7 @@ def test_el_aviso_automatico_avisa_cuando_hay_version_nueva():
 
 def test_sin_avisos_calla(monkeypatch):
     flujo = StringIO()
-    actualizacion.comprobar(abrir=red("1.12.0"))
+    actualizacion.comprobar(abrir=red(INSTALADA))
     monkeypatch.setenv("FACTEC_SIN_AVISOS", "1")
 
     assert actualizacion.avisar(flujo=flujo, automatico=True) is False
@@ -257,7 +262,7 @@ def test_sin_avisos_calla(monkeypatch):
 def test_el_arranque_avisa_solo_cuando_la_version_es_nueva():
     # Primera vez: se apunta la versión y no se dice nada.
     primera = Terminal()
-    actualizacion.comprobar(abrir=red("1.12.0"))
+    actualizacion.comprobar(abrir=red(INSTALADA))
     assert actualizacion.avisar_en_arranque(flujo=primera) is False
     assert primera.getvalue() == ""
     assert actualizacion.leer()["vista"] == actualizacion.version_instalada()

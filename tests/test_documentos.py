@@ -2175,14 +2175,16 @@ def test_no_se_puede_cambiar_la_fecha_de_un_comprobante_ya_enviado(
         services.actualizar_fecha(registro)
 
 
-def test_se_puede_respetar_la_fecha_del_documento(documentos, factura, cliente_falso, configuracion):
+def test_se_puede_respetar_la_fecha_del_documento(
+    clave_cifrado, documentos, factura, cliente_falso, configuracion
+):
     """Con ``FECHA_EMISION_AL_EMITIR = False`` manda la fecha del documento."""
     from django.test import override_settings
 
     from factec.django import conf
 
     conf.limpiar_cache()
-    ajustes = {"CLAVE_CIFRADO": "x" * 44, "FECHA_EMISION_AL_EMITIR": False}
+    ajustes = {"FECHA_EMISION_AL_EMITIR": False}
 
     with override_settings(FACTURACION_ELECTRONICA=ajustes):
         registro = factura.emitir(encolar=False)
@@ -2279,7 +2281,7 @@ def test_el_comando_revisar_firma_falla_y_avisa_por_correo(configuracion):
     import django
 
     _con_certificado_de_otro_ruc()
-    ajustes = {"CLAVE_CIFRADO": "x" * 44, "CORREOS_AVISO": ["avisos@mitienda.ec"]}
+    ajustes = {"CORREOS_AVISO": ["avisos@mitienda.ec"]}
     salida = StringIO()
     backend = {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}
     # Django 6.1 sustituye EMAIL_BACKEND por MAILERS.
@@ -2679,7 +2681,6 @@ def test_el_comando_servicios_celery_copia_los_modelos(entorno_django, tmp_path)
 
     archivos = sorted(p.name for p in destino.iterdir())
     assert archivos == [
-        "env.ejemplo",
         "proyecto-celery-beat.service",
         "proyecto-celery-worker.service",
         "proyecto-flower.service",

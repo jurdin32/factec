@@ -34,7 +34,6 @@ WorkingDirectory=__PROYECTO__
 Environment="DJANGO_SETTINGS_MODULE=__MODULO__.settings"
 Environment="PYTHONUNBUFFERED=1"
 Environment="FORKED_BY_MULTIPROCESSING=1"
-EnvironmentFile=-__PROYECTO__/.env
 # Permite consultar su API (/api/tasks) sin credenciales. Si el panel se expone
 # fuera de la máquina, quite esta línea y use --basic_auth.
 Environment="FLOWER_UNAUTHENTICATED_API=1"

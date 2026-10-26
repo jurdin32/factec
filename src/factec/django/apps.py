@@ -57,9 +57,16 @@ class FactecConfig(AppConfig):
         # terminal detrás: no ensucia los registros del servidor).
         actualizacion.avisar_en_arranque()
 
-        # Los ajustes de la emisión viven en la base de datos, como los del resto
-        # de la aplicación: si el proyecto tiene `personalize_options` puesto, se
-        # declaran aquí y al migrar quedan sembrados (ver `factec.django.ajustes`).
+        # Los ajustes de la emisión viven en la propia tabla del paquete y se
+        # siembran al migrar, como los de cualquier aplicación (ver
+        # `factec.django.ajustes`): no hace falta que el proyecto ponga nada.
+        from django.db.models.signals import post_migrate
+
         from . import ajustes as ajustes_del_sri
 
         ajustes_del_sri.declarar()
+        post_migrate.connect(
+            ajustes_del_sri.sembrar_al_migrar,
+            sender=self,
+            dispatch_uid="sri_fe_sembrar_ajustes",
+        )

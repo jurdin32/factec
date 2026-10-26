@@ -12,8 +12,8 @@ Cifrar una contraseña::
     python -c "from factec.django.crypto import cifrar; \\
         print(cifrar('mi-clave', 'LA_CLAVE_GENERADA'))"
 
-La clave de cifrado nunca debe ir en el repositorio: pásala por
-``SRI_CLAVE_CIFRADO``.
+La clave de cifrado nunca debe ir en el repositorio: guárdala en el ajuste
+``sri_clave_cifrado``.
 """
 
 from __future__ import annotations

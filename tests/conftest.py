@@ -284,14 +284,19 @@ def entorno_django():
 
 
 @pytest.fixture
-def clave_cifrado(monkeypatch) -> str:
-    """Define una clave de cifrado nueva para cada prueba."""
-    from factec.django import conf
+def clave_cifrado(entorno_django) -> str:
+    """Define una clave de cifrado nueva para cada prueba.
+
+    Va en el ajuste del paquete (``sri_clave_cifrado``), que es donde vive: el
+    paquete no lee archivos ``.env`` ni variables de entorno.
+    """
+    from factec.django import ajustes, conf
     from factec.django.crypto import generar_clave
 
-    monkeypatch.setenv("SRI_CLAVE_CIFRADO", generar_clave())
+    clave = generar_clave()
+    ajustes.poner("sri_clave_cifrado", clave)
     conf.limpiar_cache()
-    yield
+    yield clave
     conf.limpiar_cache()
 
 

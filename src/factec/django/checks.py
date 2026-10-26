@@ -29,6 +29,8 @@ ID_EMISOR = "sri_fe.W001"
 ID_CERTIFICADO_FALTA = "sri_fe.W002"
 ID_CLAVE_FALTA = "sri_fe.W003"
 ID_CLAVE_CIFRADO = "sri_fe.E004"
+#: Falta la clave con la que se cifra la contraseña: se avisa, no se bloquea.
+ID_CLAVE_CIFRADO_FALTA = "sri_fe.W009"
 ID_CERTIFICADO_INVALIDO = "sri_fe.E005"
 ID_VIGENCIA = "sri_fe.E006"
 ID_VIGENCIA_AVISO = "sri_fe.W010"
@@ -41,13 +43,27 @@ AYUDA_ADMIN = "Admin de Django → Facturación electrónica (SRI) → Configura
 
 
 def _faltan_tablas() -> bool:
-    """¿La base de datos todavía no tiene las tablas de los ajustes?"""
+    """¿La base de datos todavía no tiene la tabla de ajustes al día?
+
+    No basta con que la tabla exista: si el paquete añadió una columna, hasta que
+    no se migre leerla falla. En los dos casos lo que hay que hacer es migrar, y
+    ``migrate`` comprueba el sistema antes de empezar: por eso esto es un aviso y
+    no un error, o no habría forma de migrar.
+    """
     from django.db import connection
 
     try:
-        return "personalize_options_ajuste" not in connection.introspection.table_names()
+        if "sri_fe_ajustedelsri" not in connection.introspection.table_names():
+            return True
+        columnas = {
+            columna.name
+            for columna in connection.introspection.get_table_description(
+                connection.cursor(), "sri_fe_ajustedelsri"
+            )
+        }
     except Exception:  # noqa: BLE001 - si ni eso se puede preguntar, es que falta migrar
         return True
+    return not {"clave", "valor"} <= columnas
 
 
 def _aviso_de_tablas() -> Any:
@@ -259,7 +275,8 @@ def _comprobar_certificado(activa: Any, problemas: List[Any]) -> None:
                 f"No se pudo abrir el certificado de «{activa}»: {exc}",
                 hint=(
                     "Suele ser la contraseña incorrecta, la clave de cifrado "
-                    f"(SRI_CLAVE_CIFRADO) equivocada, o el archivo dañado. {AYUDA_ADMIN}"
+                    f"del ajuste sri_clave_cifrado equivocada, o el archivo dañado. "
+                    f"{AYUDA_ADMIN}"
                 ),
                 id=ID_CERTIFICADO_INVALIDO,
             )
@@ -270,11 +287,27 @@ def _comprobar_certificado(activa: Any, problemas: List[Any]) -> None:
         return
     except Exception as exc:  # noqa: BLE001 - falta la clave de cifrado, etc.
         if _faltan_tablas():
-            # La clave de cifrado vive en la base de datos (tabla de ajustes): si
+            # La clave de cifrado vive en la tabla de ajustes del paquete: si
             # todavía no está migrada, esto no es un error de configuración sino
             # que falta `migrate` — y sin este aviso no se podría migrar, porque
             # `migrate` comprueba el sistema antes de empezar.
             problemas.append(_aviso_de_tablas())
+            return
+        if "clave de cifrado" in str(exc).lower():
+            # El certificado no se puede abrir sin la clave, pero tenerla sin
+            # poner es parte de la puesta en marcha: se avisa y se sigue.
+            problemas.append(
+                Warning(
+                    "No hay clave de cifrado de secretos configurada: no se puede "
+                    "abrir el certificado.",
+                    hint=(
+                        "Genérela con: python -c \"from factec.django.crypto import "
+                        "generar_clave; print(generar_clave())\" y guárdela en el "
+                        "ajuste sri_clave_cifrado (admin → Ajustes del SRI)."
+                    ),
+                    id=ID_CLAVE_CIFRADO_FALTA,
+                )
+            )
             return
         problemas.append(
             Error(

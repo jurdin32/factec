@@ -23,7 +23,12 @@ from .admin_registro import registrar
 from .admin_documentos import *  # noqa: F401,F403  (registra los comprobantes)
 from .forms import ConfiguracionEmisorForm
 
-__all__ = ["ConfiguracionEmisorAdmin", "ComprobanteEmitidoAdmin", "SecuencialAdmin"]
+__all__ = [
+    "AjusteDelSriAdmin",
+    "ConfiguracionEmisorAdmin",
+    "ComprobanteEmitidoAdmin",
+    "SecuencialAdmin",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -626,3 +631,46 @@ class SecuencialAdmin(AdminConAjustes):
     @admin.display(description="Siguiente")
     def siguiente_mostrado(self, obj: models.Secuencial) -> int:
         return obj.ultimo + 1
+
+
+@registrar(models.AjusteDelSri)
+class AjusteDelSriAdmin(admin.ModelAdmin):
+    """Los ajustes de la emisión: lo que se cambia sin tocar código.
+
+    La clave **no** se escribe: es la que lee el paquete. Tampoco el tipo, el grupo
+    ni la descripción, que vienen de la declaración y se refrescan al migrar. Lo
+    único que se cambia es el valor; los secretos, como la clave que cifra la
+    contraseña del certificado, no se enseñan.
+    """
+
+    list_display = ("clave", "grupo", "valor_mostrado", "tipo", "actualizado")
+    list_filter = ("grupo", "tipo")
+    search_fields = ("clave", "valor", "descripcion")
+    ordering = ("grupo", "orden", "clave")
+    readonly_fields = (
+        "clave",
+        "tipo",
+        "grupo",
+        "descripcion",
+        "orden",
+        "editable",
+        "actualizado",
+    )
+    fields = ("clave", "grupo", "tipo", "descripcion", "valor", "orden", "editable", "actualizado")
+    save_on_top = True
+    list_per_page = 50
+
+    @admin.display(description="valor")
+    def valor_mostrado(self, obj: models.AjusteDelSri) -> str:
+        """El valor, salvo el de los ajustes que no se enseñan."""
+        if not obj.editable:
+            return "— guardado, oculto —"
+        return obj.valor
+
+    def has_add_permission(self, request: Any) -> bool:
+        # Los declara el paquete; se cambian, no se inventan.
+        return False
+
+    def has_delete_permission(self, request: Any, obj: Any = None) -> bool:
+        # Y tampoco se borran: volverían a aparecer al migrar.
+        return False

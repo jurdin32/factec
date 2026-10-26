@@ -496,10 +496,8 @@ clave de cifrado:
 python -c "from factec.django.crypto import generar_clave; print(generar_clave())"
 ```
 
-```bash
-# .env — fuera del repositorio
-SRI_CLAVE_CIFRADO=<la clave generada>
-```
+Se guarda como ajuste del paquete (`sri_clave_cifrado`), que no se enseña ni se
+edita desde el admin: no hay archivos `.env` ni variables de entorno.
 
 > Si la clave de cifrado cambia, las contraseñas guardadas dejan de poder
 > descifrarse: hay que volver a escribirlas en el admin.
@@ -760,8 +758,8 @@ comprobar), así que sirve en un cron:
 | `FACTEC_SIN_AVISOS=1` / `FACTEC_SIN_COMPROBAR=1` | Sin avisos / sin salir a la red |
 
 Si prefiere no tener ningún aviso, con `FACTEC_SIN_AVISOS=1` en el entorno del
-servicio (el `.env` de los servicios de systemd sirve) no aparece ni el recuadro
-ni el `sri_fe.W011`.
+servicio (`Environment=` en la unidad de systemd) no aparece ni el recuadro ni el
+`sri_fe.W011`.
 
 #### Comprobantes anteriores
 
@@ -1191,7 +1189,8 @@ __all__ = ("celery_app",)
 ```python
 from factec.django.conf import planificador
 
-CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
+# Sin archivos .env: el broker es el Redis del propio servidor.
+CELERY_BROKER_URL = "redis://127.0.0.1:6379/0"
 CELERY_TIMEZONE = TIME_ZONE                        # la hora de las tareas periódicas
 CELERY_WORKER_SEND_TASK_EVENTS = True              # alimenta el panel de Flower
 CELERY_TASK_SEND_SENT_EVENT = True                 # que se vean como PENDING
@@ -1439,9 +1438,9 @@ conviene dejar el arranque automático puesto.
 
 Las unidades quedan en `/etc/systemd/system/<proyecto>-celery-worker.service`,
 `…-celery-beat.service` y `…-flower.service`, con `Restart=always`, `journald`
-para los logs (`journalctl -u <proyecto>-celery-worker -f`) y un
-`EnvironmentFile` opcional en `<proyecto>/.env` para los secretos
-(`SRI_CLAVE_CIFRADO`, `CELERY_BROKER_URL`…).
+para los logs (`journalctl -u <proyecto>-celery-worker -f`). No hay
+`EnvironmentFile` ni `.env`: la configuración —incluida la clave de cifrado— vive
+en la base de datos.
 
 Las cuatro tareas quedan registradas solas porque `factec.django` está en
 `INSTALLED_APPS` y `autodiscover_tasks()` importa su `tasks`. Si arranca el worker

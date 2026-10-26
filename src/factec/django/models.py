@@ -32,6 +32,7 @@ from .campos_adicionales import (
 )
 
 __all__ = [
+    "AjusteDelSri",
     "EstadoComprobante",
     "TipoComprobante",
     "ConfiguracionEmisor",
@@ -107,8 +108,7 @@ class ConfiguracionEmisor(models.Model):
     """Datos del contribuyente, certificado de firma y su contraseña.
 
     La contraseña **nunca** se guarda en claro: se cifra con Fernet usando la
-    clave de ``FACTURACION_ELECTRONICA['CLAVE_CIFRADO']`` (o la variable de
-    entorno ``SRI_CLAVE_CIFRADO``). Genere una con::
+    clave del ajuste ``sri_clave_cifrado``. Genere una con::
 
         python -c "from factec.django.crypto import generar_clave; print(generar_clave())"
     """
@@ -724,6 +724,67 @@ ESTADOS_REINTENTABLES = frozenset(
         EstadoComprobante.ERROR,
     }
 )
+
+
+class AjusteDelSri(models.Model):
+    """Un ajuste de la facturación electrónica, en la propia tabla del paquete.
+
+    No usa la tabla de ajustes del proyecto: los paquetes son independientes y
+    este se lleva la suya, así que funciona igual con o sin ``personalize_options``
+    puesto. Las claves, los tipos y para qué sirve cada ajuste los declara el
+    paquete (ver :mod:`factec.django.ajustes`); al migrar quedan sembrados y desde
+    entonces **sólo se cambia el valor**, que es lo que se ajusta.
+    """
+
+    class Tipo(models.TextChoices):
+        TEXTO = "texto", "Texto"
+        ENTERO = "entero", "Número entero"
+        BOOLEANO = "booleano", "Sí o no"
+        LISTA = "lista", "Lista separada por comas"
+
+    clave = models.SlugField(
+        "clave",
+        max_length=60,
+        unique=True,
+        help_text="Con lo que se lee en el código: sri_ambiente…",
+    )
+    valor = models.TextField("valor", blank=True)
+    tipo = models.CharField("tipo", max_length=10, choices=Tipo.choices, default=Tipo.TEXTO)
+    grupo = models.CharField("grupo", max_length=40, blank=True, default="Emisión")
+    descripcion = models.CharField(
+        "descripción", max_length=220, blank=True, help_text="Para qué es este ajuste."
+    )
+    orden = models.PositiveIntegerField("orden", default=0)
+    editable = models.BooleanField(
+        "editable",
+        default=True,
+        help_text="Los que no lo son sólo los pone el paquete.",
+    )
+    actualizado = models.DateTimeField("actualizado", auto_now=True)
+
+    class Meta:
+        verbose_name = "ajuste del SRI"
+        verbose_name_plural = "ajustes del SRI"
+        ordering = ["grupo", "orden", "clave"]
+
+    def __str__(self) -> str:
+        return f"{self.clave} = {self.valor}"
+
+    @property
+    def como_valor(self) -> Any:
+        """El valor con su tipo: número, sí/no, lista o texto."""
+        if self.tipo == self.Tipo.BOOLEANO:
+            return str(self.valor).strip().lower() in ("1", "si", "sí", "true", "on", "yes")
+        if self.tipo == self.Tipo.ENTERO:
+            try:
+                return int(str(self.valor).strip())
+            except (TypeError, ValueError):
+                return 0
+        if self.tipo == self.Tipo.LISTA:
+            return tuple(
+                pieza.strip() for pieza in str(self.valor).split(",") if pieza.strip()
+            )
+        return self.valor
 
 
 class Secuencial(models.Model):

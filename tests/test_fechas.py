@@ -144,17 +144,11 @@ class TestNombresDeLosAmbientes:
 
 
 def test_el_ajuste_ambiente_acepta_el_nombre(entorno_django):
-    """Dinámico: en settings se puede escribir «pruebas» en lugar de 1."""
-    from django.test import override_settings
+    """Dinámico: se puede escribir «pruebas» en lugar de 1."""
+    from factec.django import ajustes, conf
 
-    from factec.django import conf
+    ajustes.poner("sri_ambiente", "producción")
+    assert conf.ambiente() == 2
 
-    with override_settings(
-        FACTURACION_ELECTRONICA={"CLAVE_CIFRADO": "x" * 44, "AMBIENTE": "producción"}
-    ):
-        assert conf.ambiente() == 2
-
-    with override_settings(
-        FACTURACION_ELECTRONICA={"CLAVE_CIFRADO": "x" * 44, "AMBIENTE": "pruebas"}
-    ):
-        assert conf.ambiente() == 1
+    ajustes.poner("sri_ambiente", "pruebas")
+    assert conf.ambiente() == 1
