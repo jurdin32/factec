@@ -123,7 +123,7 @@ def _version_instalada() -> str:
 
         return version("factec")
     except (PackageNotFoundError, ValueError):  # pragma: no cover - sin instalar
-        return "1.12.3"
+        return "1.12.4"
 
 
 __version__ = _version_instalada()

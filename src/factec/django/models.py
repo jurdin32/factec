@@ -119,7 +119,10 @@ class ConfiguracionEmisor(models.Model):
     )
     activo = models.BooleanField(
         "activa", default=True,
-        help_text="Solo se usa una configuración activa por ambiente.",
+        help_text=(
+            "Solo hay una activa: al activar esta se apagan las demás. Es la que "
+            "firma y la que decide si se emite en pruebas o en producción."
+        ),
     )
     ambiente = models.PositiveSmallIntegerField(
         "ambiente", default=int(Ambiente.PRUEBAS),
@@ -405,11 +408,17 @@ class ConfiguracionEmisor(models.Model):
             raise ValidationError(errores)
 
     def save(self, *args: Any, **kwargs: Any) -> "ConfiguracionEmisor":
-        # Una sola configuración activa por ambiente.
-        if self.activo and self.ambiente:
-            ConfiguracionEmisor.objects.filter(
-                activo=True, ambiente=self.ambiente
-            ).exclude(pk=self.pk).update(activo=False)
+        """Deja **una sola** configuración activa.
+
+        Antes se desactivaban solo las del mismo ambiente, así que podían quedar
+        dos activas —la de pruebas y la de producción— y el sistema usaba una sin
+        que se supiera cuál. Ahora, activar una apaga las demás: la activa es la
+        que firma y la que dice el ambiente.
+        """
+        if self.activo:
+            ConfiguracionEmisor.objects.filter(activo=True).exclude(pk=self.pk).update(
+                activo=False
+            )
         return super().save(*args, **kwargs)
 
 
