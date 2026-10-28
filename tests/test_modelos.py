@@ -184,3 +184,79 @@ class TestEmisor:
         assert Emisor(
             **base, contribuyente_rimpe=True, regimen="NEGOCIO POPULAR"
         ).rimpe_texto == "CONTRIBUYENTE NEGOCIO POPULAR - RÉGIMEN RIMPE"
+
+
+class TestBaseDelIva:
+    """El IVA va sobre la base más el ICE y el IRBPNR de la línea."""
+
+    def test_el_iva_incluye_el_ice_en_su_base(self):
+        detalle = Detalle(
+            descripcion="Licor",
+            cantidad=Decimal("1"),
+            precio_unitario=Decimal("100"),
+            impuestos=[
+                Impuesto(codigo=CodigoImpuesto.ICE, codigo_porcentaje="3023", tarifa=Decimal("10")),
+                Impuesto(codigo=CodigoImpuesto.IVA, codigo_porcentaje=TarifaIva.IVA_15),
+            ],
+        )
+
+        ice, iva = detalle.impuestos_resueltos()
+
+        assert ice.base_imponible == Decimal("100.00")
+        assert ice.valor == Decimal("10.00")
+        assert iva.base_imponible == Decimal("110.00")
+        assert iva.valor == Decimal("16.50")
+
+    def test_un_codigo_de_iva_desconocido_no_se_supone_el_15(self):
+        with pytest.raises(ErrorValidacion):
+            Impuesto(codigo_porcentaje="9999").resolver()
+
+    def test_un_impuesto_escrito_a_mano_conserva_su_base(self):
+        detalle = Detalle(
+            descripcion="Servicio",
+            cantidad=Decimal("2"),
+            precio_unitario=Decimal("50"),
+            impuestos=[Impuesto(codigo_porcentaje=TarifaIva.IVA_15, valor=Decimal("5.00"))],
+        )
+
+        (iva,) = detalle.impuestos_resueltos()
+
+        assert iva.base_imponible == Decimal("100.00")
+        assert iva.valor == Decimal("5.00")
+
+
+class TestPagosDeLaFactura:
+    """Lo declarado como pagado tiene que ser lo que se cobra."""
+
+    def _factura(self, total_pago):
+        from factec.catalogos import TipoIdentificacion
+        from factec.comprobantes import Factura
+        from factec.modelos import Pago, Receptor
+
+        return Factura(
+            emisor=Emisor(ruc="0703886697001", razon_social="EMPRESA", dir_matriz="QUITO"),
+            ambiente="1",
+            secuencial="000000001",
+            receptor=Receptor(
+                razon_social="CONSUMIDOR FINAL",
+                identificacion="9999999999999",
+                tipo_identificacion=TipoIdentificacion.CONSUMIDOR_FINAL,
+                direccion="QUITO",
+            ),
+            detalles=[
+                Detalle(
+                    descripcion="Servicio",
+                    cantidad=Decimal("1"),
+                    precio_unitario=Decimal("100"),
+                    impuestos=[Impuesto(codigo_porcentaje=TarifaIva.IVA_15)],
+                )
+            ],
+            pagos=[Pago(total=Decimal(total_pago))],
+        )
+
+    def test_los_pagos_que_no_cuadran_se_avisan_antes_de_enviar(self):
+        with pytest.raises(ErrorValidacion):
+            self._factura("1.00").validar()
+
+    def test_los_pagos_que_cuadran_pasan(self):
+        self._factura("115.00").validar()

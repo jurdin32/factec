@@ -131,6 +131,12 @@ def clave_cifrado() -> str:
 def configuracion_activa(ambiente: Optional[int] = None) -> Optional[Any]:
     """Devuelve la ``ConfiguracionEmisor`` activa, o ``None``.
 
+    Puede haber una activa por ambiente (una de pruebas y otra de producción). Sin
+    ambiente explícito manda la del ajuste ``AMBIENTE``, que es el interruptor de
+    pruebas/producción; si ese ambiente no tiene configuración activa, se usa la de
+    mayor ambiente. Antes se tomaba siempre la de producción, así que la de pruebas
+    quedaba inalcanzable en cuanto existía la otra.
+
     Nunca lanza excepción: si la tabla todavía no existe (antes de ``migrate``)
     devuelve ``None`` para que se use la configuración de ``settings``.
     """
@@ -143,6 +149,12 @@ def configuracion_activa(ambiente: Optional[int] = None) -> Optional[Any]:
         consulta = ConfiguracionEmisor.objects.filter(activo=True)
         if ambiente is not None:
             consulta = consulta.filter(ambiente=int(ambiente))
+            return consulta.order_by("-ambiente").first()
+
+        preferido = leer_ambiente(obtener("AMBIENTE", int(Ambiente.PRUEBAS)))
+        elegida = consulta.filter(ambiente=preferido).order_by("-pk").first()
+        if elegida is not None:
+            return elegida
         return consulta.order_by("-ambiente").first()
     except Exception:  # noqa: BLE001 - tabla inexistente, apps sin cargar, etc.
         return None
@@ -241,9 +253,15 @@ def cliente():
 def limpiar_cache() -> None:
     """Descarta cliente y certificado memorizados (útil al editar la configuración).
 
+    Se lleva también lo que se leyó de la tabla de ajustes: si no, cambiar el
+    ambiente en el admin no valía hasta reiniciar el proceso.
+
     Es tolerante: si alguna de las dos está sustituida por una función simple (por
     ejemplo en pruebas), simplemente se omite.
     """
+    from .ajustes import _leidos_de_la_base
+
+    _leidos_de_la_base.cache_clear()
     for funcion in (certificado, cliente):
         vaciar = getattr(funcion, "cache_clear", None)
         if callable(vaciar):

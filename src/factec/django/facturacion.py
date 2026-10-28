@@ -28,7 +28,8 @@ los nombres de tu modelo no encajen con la convención.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
+from contextlib import contextmanager
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Union
 
 from ..catalogos import TipoComprobante
 from ..comprobantes import Comprobante
@@ -215,70 +216,102 @@ def emitir(
     # (la fecha con la que se emite la fija fijar_fecha_de_emision)
 
     if forzar:
-        # Reemitir un comprobante que el SRI ya rechazó también necesita número
-        # nuevo: el rechazado dejó el suyo registrado en el SRI.
+        # Reemitir es hacerlo de nuevo desde cero: el número que ya se usó quedó
+        # registrado en el SRI, así que siempre se estrena otro. Antes solo se
+        # soltaba cuando el anterior estaba rechazado, y con uno autorizado o en
+        # error el paquete repetía el mismo secuencial («SECUENCIAL REGISTRADO»).
         anterior = models.ComprobanteEmitido.para_objeto(obj, tipo_comprobante)
-        if anterior is not None and anterior.estado in models.ESTADOS_RECHAZADOS:
+        if anterior is not None:
             logger.info(
-                "Se reemite %s con forzar=True y su último comprobante fue rechazado (%s); "
-                "se suelta el secuencial %s.",
-                obj, anterior.estado, anterior.secuencial,
+                "Se reemite %s con forzar=True; se suelta el secuencial %s (%s).",
+                obj, anterior.secuencial, anterior.estado,
             )
-            _soltar_secuencial(obj)
-            manejador._estrenar_secuencial = True  # noqa: SLF001 - ajuste deliberado
+        _soltar_secuencial(obj)
+        manejador._estrenar_secuencial = True  # noqa: SLF001 - ajuste deliberado
 
-    if not forzar:
-        existente = models.ComprobanteEmitido.para_objeto(obj, tipo_comprobante)
-        if existente is not None:
-            if existente.autorizado:
-                logger.info(
-                    "El documento %s ya tiene el comprobante %s autorizado; no se reemite.",
-                    obj, existente.clave_acceso,
-                )
-                _asociar_en_modelo(obj, existente)
-                return existente
-            if existente.estado in models.ESTADOS_RECHAZADOS:
-                # El SRI lo devolvió (fecha fuera de rango, datos mal): el XML
-                # guardado ya no sirve. Además quedó **registrado** con ese
-                # secuencial, así que reenviarlo daría «ERROR SECUENCIAL
-                # REGISTRADO» y el documento no saldría nunca: se suelta el
-                # número y se rehace con uno nuevo, con los datos actuales. El
-                # registro anterior se conserva como historial del rechazo.
-                logger.info(
-                    "El comprobante %s del documento %s fue rechazado por el SRI (%s); "
-                    "se suelta el secuencial %s y se genera uno nuevo con los datos actuales.",
-                    existente.clave_acceso, obj, existente.estado, existente.secuencial,
-                )
-                _soltar_secuencial(obj)
-                manejador._estrenar_secuencial = True  # noqa: SLF001 - ajuste deliberado
-            elif _fecha_desactualizada(existente):
-                logger.info(
-                    "El comprobante %s del documento %s quedó sin enviar del %s; se "
-                    "refecha a hoy (%s) antes de firmarlo.",
-                    existente.clave_acceso, obj, existente.fecha_emision, fechas.hoy_en_ecuador(),
-                )
-                services.actualizar_fecha(existente)
-                _asociar_en_modelo(obj, existente)
-                return _enviar(existente, encolar=encolar, intentos=intentos, espera=espera)
-            else:
-                logger.info(
-                    "El documento %s ya tiene el comprobante %s (%s); se reintenta.",
-                    obj, existente.clave_acceso, existente.estado,
-                )
-                _asociar_en_modelo(obj, existente)
-                return _enviar(existente, encolar=encolar, intentos=intentos, espera=espera)
+    # El bloqueo de la fila del documento cubre la comprobación y el registro, no
+    # el envío: dos peticiones a la vez (dos pestañas, o el worker y la vista) no
+    # reservan dos secuenciales para el mismo documento, y el SRI no se espera
+    # dentro de una transacción.
+    registro: Optional[models.ComprobanteEmitido] = None
+    with _bloqueo_del_documento(obj):
+        if not forzar:
+            existente = models.ComprobanteEmitido.para_objeto(obj, tipo_comprobante)
+            if existente is not None:
+                if existente.autorizado:
+                    logger.info(
+                        "El documento %s ya tiene el comprobante %s autorizado; no se reemite.",
+                        obj, existente.clave_acceso,
+                    )
+                    _asociar_en_modelo(obj, existente)
+                    return existente
+                if existente.estado in models.ESTADOS_RECHAZADOS:
+                    # El SRI lo devolvió (fecha fuera de rango, datos mal): el XML
+                    # guardado ya no sirve. Además quedó **registrado** con ese
+                    # secuencial, así que reenviarlo daría «ERROR SECUENCIAL
+                    # REGISTRADO» y el documento no saldría nunca: se suelta el
+                    # número y se rehace con uno nuevo, con los datos actuales. El
+                    # registro anterior se conserva como historial del rechazo.
+                    logger.info(
+                        "El comprobante %s del documento %s fue rechazado por el SRI (%s); "
+                        "se suelta el secuencial %s y se genera uno nuevo con los datos actuales.",
+                        existente.clave_acceso, obj, existente.estado, existente.secuencial,
+                    )
+                    _soltar_secuencial(obj)
+                    manejador._estrenar_secuencial = True  # noqa: SLF001 - ajuste deliberado
+                elif _fecha_desactualizada(existente):
+                    logger.info(
+                        "El comprobante %s del documento %s quedó sin enviar del %s; se "
+                        "refecha a hoy (%s) antes de firmarlo.",
+                        existente.clave_acceso, obj, existente.fecha_emision, fechas.hoy_en_ecuador(),
+                    )
+                    services.actualizar_fecha(existente)
+                    _asociar_en_modelo(obj, existente)
+                    registro = existente
+                else:
+                    logger.info(
+                        "El documento %s ya tiene el comprobante %s (%s); se reintenta.",
+                        obj, existente.clave_acceso, existente.estado,
+                    )
+                    _asociar_en_modelo(obj, existente)
+                    registro = existente
 
-    comprobante = manejador.comprobante(obj)
-    fijar_fecha_de_emision(comprobante, fecha=fecha_emision)
-    _revisar(comprobante, revisar=revisar)
-    # Solo cuando ya se sabe que se puede emitir: si la revisión falla, el
-    # documento se queda como estaba.
-    _fijar_fecha_en_el_documento(obj, comprobante.fecha_emision)
-    registro = services.registrar(comprobante, guardar_xml=guardar_xml)
-    if vincular:
-        registro.vincular(obj)
-    _asociar_en_modelo(obj, registro)
+        if registro is None:
+            comprobante = manejador.comprobante(obj)
+            fijar_fecha_de_emision(comprobante, fecha=fecha_emision)
+            _revisar(comprobante, revisar=revisar)
+            # Solo cuando ya se sabe que se puede emitir: si la revisión falla, el
+            # documento se queda como estaba.
+            _fijar_fecha_en_el_documento(obj, comprobante.fecha_emision)
+            registro = services.registrar(comprobante, guardar_xml=guardar_xml)
+            if vincular:
+                registro.vincular(obj)
+            _asociar_en_modelo(obj, registro)
+
     return _enviar(registro, encolar=encolar, intentos=intentos, espera=espera)
+
+
+@contextmanager
+def _bloqueo_del_documento(obj: Any) -> Iterator[None]:
+    """Toma la fila del documento mientras se decide si hay que emitir.
+
+    Con el modelo guardado se bloquea su fila (``SELECT ... FOR UPDATE``) dentro de
+    una transacción corta: la segunda petición espera, y al entrar ya ve el
+    comprobante que dejó la primera. Con un objeto suelto no hay nada que bloquear
+    y se sigue igual.
+    """
+    if not models.es_modelo_guardado(obj):
+        yield
+        return
+    from django.db import transaction
+
+    modelo = type(obj)
+    if not modelo._meta.managed:  # los modelos de las pruebas no tienen tabla
+        yield
+        return
+    with transaction.atomic():
+        modelo._default_manager.select_for_update().filter(pk=obj.pk).first()
+        yield
 
 
 def _fijar_fecha_en_el_documento(obj: Any, fecha: Any) -> None:

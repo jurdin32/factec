@@ -604,6 +604,26 @@ def firmar(
     return registro
 
 
+def clave_ya_registrada(recepcion: Any) -> bool:
+    """¿El SRI contestó que ya tenía esta clave de acceso?
+
+    Es lo que pasa al reintentar el envío de un comprobante que el SRI recibió
+    pero cuya respuesta se perdió (un corte, un timeout). No es un rechazo: el
+    comprobante existe allí y lo único que falta es consultar su autorización.
+    """
+    textos = []
+    for mensaje in getattr(recepcion, "mensajes", None) or []:
+        for campo in ("mensaje", "informacion_adicional"):
+            valor = getattr(mensaje, campo, "") if not isinstance(mensaje, dict) else mensaje.get(campo, "")
+            if valor:
+                textos.append(str(valor))
+    estado = str(getattr(recepcion, "estado", "") or "").upper()
+    if "EN PROCESO" in estado:
+        return True
+    unido = " ".join(textos).upper()
+    return "CLAVE ACCESO REGISTRADA" in unido or "CLAVE ACCESO EN PROCESO" in unido
+
+
 def enviar(
     registro: models.ComprobanteEmitido,
     *,
@@ -643,6 +663,17 @@ def enviar(
     mensajes = mensajes_a_dict(recepcion.mensajes)
     if recepcion.recibida:
         registro.estado = models.EstadoComprobante.RECIBIDO
+        registro.error = ""
+    elif clave_ya_registrada(recepcion):
+        # El SRI ya tiene **esta** clave: es un reenvío (un reintento tras un
+        # corte), no un rechazo. Marcarlo como devuelto hacía que el paquete
+        # soltara el secuencial y emitiera otro comprobante: dos facturas
+        # legales por una sola venta.
+        logger.info(
+            "El SRI ya tenía el comprobante %s (%s): se consulta su autorización.",
+            registro.clave_acceso, recepcion.estado or "sin estado",
+        )
+        registro.estado = models.EstadoComprobante.EN_PROCESO
         registro.error = ""
     else:
         registro.estado = models.EstadoComprobante.DEVUELTO
@@ -758,9 +789,12 @@ def procesar(
         logger.warning("Fallo al enviar el comprobante %s: %s", registro.pk, exc)
         return registro
 
-    if not recepcion.recibida:
+    if not recepcion.recibida and not clave_ya_registrada(recepcion):
         return registro
 
+    # Si el SRI ya tenía el comprobante —o lo acaba de recibir— lo que falta es la
+    # autorización: se consulta. Así un reintento recupera la factura buena en vez
+    # de dejarla por devuelta y reemitirla con otro número.
     try:
         autorizar(registro, intentos=intentos, espera=espera)
     except ErrorFacturacion as exc:

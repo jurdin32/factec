@@ -110,7 +110,23 @@ from .sri import (
     existe_ruc,
 )
 
-__version__ = "1.12.0"
+def _version_instalada() -> str:
+    """La versión que está instalada, tomada de los metadatos del paquete.
+
+    Escribirla a mano en este archivo la dejaba desfasada con ``pyproject.toml``
+    (pasó con la 1.12.2, que se anunciaba como 1.12.0 y por eso el aviso de
+    versión nueva salía siempre). Si el paquete se usa desde el código fuente sin
+    instalar, no hay metadatos y se dice lo que diga ``pyproject.toml``.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        return version("factec")
+    except (PackageNotFoundError, ValueError):  # pragma: no cover - sin instalar
+        return "1.12.3"
+
+
+__version__ = _version_instalada()
 
 __all__ = [
     "__version__",

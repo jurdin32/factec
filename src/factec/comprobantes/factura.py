@@ -8,7 +8,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 
 from ..catalogos import ETIQUETA_RAIZ, TipoComprobante, VERSIONES
 from ..excepciones import ErrorValidacion
-from ..modelos import Compensacion, Detalle, Pago, Receptor, Reembolso, a_decimal
+from ..modelos import Compensacion, Detalle, Pago, Receptor, Reembolso, a_decimal, cuantizar
 from ._comun import (
     anexar_pagos,
     calcular_totales,
@@ -139,3 +139,21 @@ class Factura(Comprobante):
         totales = calcular_totales(self.detalles)
         if totales["importe_total"] <= 0:
             raise ErrorValidacion("El importe total de la factura debe ser mayor que cero.")
+        self._validar_los_pagos(totales["importe_total"])
+
+    def _validar_los_pagos(self, importe_total: Any) -> None:
+        """Lo que se declara pagado tiene que ser lo que se cobra.
+
+        El SRI devuelve la factura si los pagos no suman el ``importeTotal``, y
+        hasta ahora eso se descubría al enviarla, con el secuencial ya consumido.
+        """
+        pagos = list(self.pagos) or []
+        if not pagos:
+            return
+        suma = cuantizar(sum((a_decimal(pago.total) for pago in pagos), Decimal("0")))
+        cobrado = cuantizar(a_decimal(importe_total))
+        if abs(suma - cobrado) > Decimal("0.01"):
+            raise ErrorValidacion(
+                f"Los pagos suman {suma:.2f} y el importe total es {cobrado:.2f}: "
+                "tienen que coincidir."
+            )

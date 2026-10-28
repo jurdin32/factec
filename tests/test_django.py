@@ -1025,3 +1025,26 @@ def test_sin_celery_instalado_se_emite_igual(configuracion, cliente_falso, monke
     # El camino síncrono (el que usa ``emitir`` cuando no hay cola) funciona igual.
     emitido = services.procesar(registro, intentos=1, espera=0)
     assert emitido.autorizado
+
+
+def test_el_reenvio_de_una_clave_ya_registrada_se_autoriza(configuracion, cliente_falso, documento):
+    """Un reintento no puede marcar por devuelto lo que el SRI ya tiene.
+
+    El SRI contesta «CLAVE ACCESO REGISTRADA» cuando el comprobante llegó pero la
+    respuesta se perdió. Tratar eso como rechazo soltaba el secuencial y emitía
+    otra factura: dos comprobantes legales por una sola venta.
+    """
+    from factec.django import facturacion, models
+    from factec.sri.soap import Mensaje, RespuestaRecepcion
+
+    cliente_falso.validar_comprobante = lambda xml: RespuestaRecepcion(
+        estado="DEVUELTA",
+        clave_acceso=RUC,
+        mensajes=[Mensaje(identificador="50", mensaje="CLAVE ACCESO REGISTRADA")],
+        crudo="<respuesta/>",
+    )
+
+    registro = facturacion.emitir(documento, encolar=False, intentos=1, espera=0)
+
+    assert registro.estado == models.EstadoComprobante.AUTORIZADO
+    assert "autorizacion" in cliente_falso.llamadas

@@ -82,6 +82,21 @@ def _dos_decimales(valor: Decimal) -> Decimal:
     return valor.quantize(_CENTIMOS, rounding=ROUND_HALF_UP)
 
 
+def _impuesto_con_base(impuesto: "Impuesto", base: Decimal) -> "Impuesto":
+    """Una copia del impuesto con la base resuelta y la tarifa y el valor puestos."""
+    propia = impuesto.base_imponible
+    trae_base = propia is not None and a_decimal(propia) != 0
+    copia = Impuesto(
+        codigo=impuesto.codigo,
+        codigo_porcentaje=impuesto.codigo_porcentaje,
+        base_imponible=propia if trae_base else base,
+        tarifa=impuesto.tarifa,
+        valor=impuesto.valor,
+        valor_devolucion_iva=impuesto.valor_devolucion_iva,
+    )
+    return copia.resolver()
+
+
 @dataclass
 class Emisor:
     """Datos del contribuyente que emite el comprobante."""
@@ -169,12 +184,23 @@ class Impuesto:
         return str(getattr(self.codigo_porcentaje, "value", self.codigo_porcentaje))
 
     def resolver(self) -> "Impuesto":
-        """Completa ``tarifa`` (según el catálogo) y ``valor`` si faltan."""
+        """Completa ``tarifa`` (según el catálogo) y ``valor`` si faltan.
+
+        Un código de IVA que no está en el catálogo **no** se sustituye por el 15 %:
+        eso emitía el impuesto equivocado sin decir nada. Si el código no se conoce,
+        hay que escribir la tarifa a mano (``tarifa=``).
+        """
         base = a_decimal(self.base_imponible)
         if self.tarifa is None:
-            self.tarifa = PORCENTAJE_IVA.get(
-                self.porcentaje_valor(), PORCENTAJE_IVA[TarifaIva.IVA_15.value]
-            )
+            es_iva = self.codigo_valor() == str(CodigoImpuesto.IVA.value)
+            tarifa_del_catalogo = PORCENTAJE_IVA.get(self.porcentaje_valor())
+            if tarifa_del_catalogo is None:
+                raise ErrorValidacion(
+                    f"Código de porcentaje «{self.porcentaje_valor()}» desconocido: "
+                    "escriba la tarifa del impuesto o use uno del catálogo del SRI."
+                    + ("" if es_iva else " Para ICE e IRBPNR la tarifa siempre va a mano.")
+                )
+            self.tarifa = tarifa_del_catalogo
         tarifa = a_decimal(self.tarifa)
         if self.valor is None:
             self.valor = _dos_decimales(base * tarifa / Decimal("100"))
@@ -209,19 +235,38 @@ class Detalle:
         return _dos_decimales(self.subtotal - a_decimal(self.descuento))
 
     def impuestos_resueltos(self) -> List[Impuesto]:
+        """Los impuestos de la línea, con la base y la tarifa ya resueltas.
+
+        La base es la de la línea salvo que el impuesto traiga una propia: mirar si
+        traía ``valor`` dejaba ``baseImponible 0.00`` en los impuestos escritos a
+        mano, y el SRI devuelve el comprobante por no cuadrar la base.
+
+        El IVA va sobre la base **más el ICE y el IRBPNR** de la misma línea, como
+        manda la ficha técnica. Antes se calculaba sobre el total de la línea y el
+        IVA salía corto en los bienes con ICE (alcohol, combustible, telecom).
+        """
         base = self.precio_total_sin_impuesto
-        resueltos = []
-        for impuesto in self.impuestos:
-            copia = Impuesto(
-                codigo=impuesto.codigo,
-                codigo_porcentaje=impuesto.codigo_porcentaje,
-                base_imponible=impuesto.base_imponible if impuesto.valor is not None else base,
-                tarifa=impuesto.tarifa,
-                valor=impuesto.valor,
-                valor_devolucion_iva=impuesto.valor_devolucion_iva,
-            )
-            resueltos.append(copia.resolver())
-        return resueltos
+        iva = str(CodigoImpuesto.IVA.value)
+        indices = list(range(len(self.impuestos)))
+        resueltos: Dict[int, Impuesto] = {}
+
+        # Primero los que no son IVA: su importe entra en la base del IVA.
+        adicionales = Decimal("0")
+        for indice in indices:
+            impuesto = self.impuestos[indice]
+            if impuesto.codigo_valor() == iva:
+                continue
+            resuelto = _impuesto_con_base(impuesto, base)
+            resueltos[indice] = resuelto
+            adicionales += a_decimal(resuelto.valor)
+
+        for indice in indices:
+            impuesto = self.impuestos[indice]
+            if impuesto.codigo_valor() != iva:
+                continue
+            resueltos[indice] = _impuesto_con_base(impuesto, base + adicionales)
+
+        return [resueltos[indice] for indice in indices]
 
     def validar(self) -> None:
         if not self.descripcion:

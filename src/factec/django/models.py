@@ -825,14 +825,22 @@ class Secuencial(models.Model):
         pto_emi: str = "001",
         ambiente: int = 1,
     ) -> int:
-        """Reserva y devuelve el siguiente secuencial de forma atómica."""
+        """Reserva y devuelve el siguiente secuencial de forma atómica.
+
+        La fila se crea aparte y **después** se bloquea: con
+        ``select_for_update().get_or_create()`` las dos primeras peticiones a la vez
+        podían incrementar la misma fila recién creada y salir con el mismo número.
+        """
+        clave = {
+            "tipo_comprobante": tipo_comprobante,
+            "estab": estab,
+            "pto_emi": pto_emi,
+            "ambiente": ambiente,
+        }
         with transaction.atomic():
-            fila, _ = cls.objects.select_for_update().get_or_create(
-                tipo_comprobante=tipo_comprobante,
-                estab=estab,
-                pto_emi=pto_emi,
-                ambiente=ambiente,
-            )
-            fila.ultimo += 1
+            cls.objects.get_or_create(**clave)
+            fila = cls.objects.select_for_update().get(**clave)
+            fila.ultimo = models.F("ultimo") + 1
             fila.save(update_fields=["ultimo", "actualizado"])
+            fila.refresh_from_db(fields=["ultimo"])
             return fila.ultimo

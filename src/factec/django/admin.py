@@ -660,6 +660,17 @@ class AjusteDelSriAdmin(admin.ModelAdmin):
     save_on_top = True
     list_per_page = 50
 
+    def save_model(self, request: Any, obj: Any, form: Any, change: bool) -> None:
+        """Al cambiar un ajuste, se suelta lo que quedó leído de la base.
+
+        Los ajustes se leen una vez por proceso y se guardan en memoria. Sin esto,
+        cambiar el ambiente a producción —o cualquier otro ajuste— en el admin no
+        surtía efecto hasta reiniciar el servicio, así que la factura seguía
+        saliendo contra las pruebas.
+        """
+        super().save_model(request, obj, form, change)
+        conf.limpiar_cache()
+
     @admin.display(description="valor")
     def valor_mostrado(self, obj: models.AjusteDelSri) -> str:
         """El valor, salvo el de los ajustes que no se enseñan."""
