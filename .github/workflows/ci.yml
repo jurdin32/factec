@@ -12,12 +12,18 @@ concurrency:
 jobs:
   pruebas:
     name: Pruebas (Python ${{ matrix.python }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         # Las versiones que declara el paquete (requires-python = ">=3.9").
-        python: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:
+          # ubuntu-latest ya es 26.04 y ahí no hay binarios de Python 3.9: esa
+          # versión se prueba en 24.04, la última imagen que los publica.
+          - os: ubuntu-24.04
+            python: "3.9"
     steps:
       - uses: actions/checkout@v4
 
