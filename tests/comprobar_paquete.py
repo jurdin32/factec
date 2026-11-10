@@ -29,7 +29,6 @@ OBLIGATORIOS = (
     "factec/deploy/systemd/celery-worker.service",
     "factec/deploy/systemd/celery-beat.service",
     "factec/deploy/systemd/flower.service",
-    "factec/deploy/systemd/env.ejemplo",
     "factec/django/management/commands/servicios_celery.py",
     "factec/django/migrations/0011_el_dia_del_sri_en_la_fecha_de_emision.py",
 )
@@ -60,10 +59,22 @@ def comprobar(ruta: Path) -> list[str]:
         metadatos = wheel.read(
             next(n for n in contenido if n.endswith(".dist-info/METADATA"))
         ).decode("utf-8")
+        servicios = {
+            nombre: wheel.read(nombre).decode("utf-8", "replace")
+            for nombre in contenido
+            if nombre.endswith(".service")
+        }
 
     problemas = [
         f"falta {nombre}" for nombre in OBLIGATORIOS + MODULOS if nombre not in contenido
     ]
+
+    # Los servicios viajan sin archivo de entorno: la configuración —incluida la
+    # clave de cifrado— vive en la base de datos. Si alguno volviera a pedir
+    # EnvironmentFile, el paquete quedaría incompleto al instalarlo.
+    for nombre, texto in servicios.items():
+        if "EnvironmentFile" in texto:
+            problemas.append(f"{nombre} pide un archivo de entorno")
 
     migraciones = [n for n in contenido if n.startswith("factec/django/migrations/00")]
     if len(migraciones) < 11:

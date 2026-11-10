@@ -1365,13 +1365,16 @@ python manage.py servicios_celery --plantillas --destino deploy/systemd
 ```
 
 Copia los modelos con el nombre de su proyecto, el módulo y la concurrencia ya
-puestos (`<proyecto>-celery-worker.service`, `…-celery-beat.service`,
-`…-flower.service` y un `env.ejemplo`), y deja cuatro marcadores que dependen del
-servidor: `__USUARIO__`, `__GRUPO__`, `__PROYECTO__` y `__VENV__`. El comando
-imprime el `sed` que los sustituye y los `systemctl` para dejarlos instalados.
-Cada archivo lleva arriba su explicación y lo mismo el `env.ejemplo` (para qué
-sirve cada variable), así que se pueden editar a mano sin la documentación al
-lado.
+puestos (`<proyecto>-celery-worker.service`, `…-celery-beat.service` y
+`…-flower.service`), y deja cuatro marcadores que dependen del servidor:
+`__USUARIO__`, `__GRUPO__`, `__PROYECTO__` y `__VENV__`. El comando imprime el
+`sed` que los sustituye y los `systemctl` para dejarlos instalados. Cada archivo
+lleva arriba su explicación, así que se pueden editar a mano sin la
+documentación al lado.
+
+No se copia ningún archivo de entorno: la configuración del SRI —el ambiente, el
+certificado y la clave de cifrado— vive en la base de datos y se edita desde el
+admin, así que los servicios no necesitan leer nada del disco.
 
 #### Sin copiar nada: enlazados desde el proyecto
 
